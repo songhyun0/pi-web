@@ -164,6 +164,7 @@ const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
 const AGENT_STATE_RECONCILE_MS = 15_000;
+const EVENT_STREAM_CONNECT_TIMEOUT_MS = 5_000;
 const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
@@ -205,6 +206,22 @@ function readStoredThinkingLevel(): ThinkingLevelOption {
 
 function hasStoredThinkingLevel(): boolean {
   return THINKING_LEVEL_VALUES.has(readLocalStorageValue(THINKING_LEVEL_STORAGE_KEY) ?? "");
+}
+
+type EventStreamConnectionStatus = "connected" | "timeout" | "closed";
+
+type EventStreamConnectionResult = {
+  status: EventStreamConnectionStatus;
+  source: EventSource;
+};
+
+class EventStreamConnectionError extends Error {
+  constructor(public readonly status: Exclude<EventStreamConnectionStatus, "connected">) {
+    super(status === "timeout"
+      ? "Timed out connecting to the agent event stream. Please try again."
+      : "Failed to connect to the agent event stream. Please try again.");
+    this.name = "EventStreamConnectionError";
+  }
 }
 
 function createNoticeId(): string {
@@ -545,12 +562,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setEntryIds(d.context.entryIds ?? []);
       setCurrentModelOverride(null);
       setError(null);
-      if (d.agentState?.state?.extensionStatuses) setExtensionStatuses(d.agentState.state.extensionStatuses);
-      if (d.agentState?.state?.extensionWidgets) setExtensionWidgets(d.agentState.state.extensionWidgets);
-      if (d.agentState?.state?.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(d.agentState.state.queuedMessages));
+      const liveState = d.agentState?.state;
+      if (liveState) {
+        if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
+        if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
+        if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
+        if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
+        if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
+        if (liveState.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
+      }
       else if (d.agentState && !d.agentState.running) setQueuedMessages({ steering: [], followUp: [] });
       // If no live agent state, fall back to thinking level from session file
-      if (!d.agentState?.state?.thinkingLevel && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
+      if (!liveState?.thinkingLevel && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
         setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
       }
       return d.agentState ?? null;
@@ -669,7 +692,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return data?.messages ?? [];
   }, []);
 
-  const connectEvents = useCallback((sid: string): Promise<void> => {
+  const connectEvents = useCallback((sid: string): Promise<EventStreamConnectionResult> => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -679,35 +702,50 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     return new Promise((resolve) => {
       let settled = false;
-      const settle = () => {
+      const settle = (status: EventStreamConnectionStatus) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        resolve();
+        resolve({ status, source: es });
       };
-      const timeout = setTimeout(settle, 1500);
+      const timeout = setTimeout(() => settle("timeout"), EVENT_STREAM_CONNECT_TIMEOUT_MS);
 
       es.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as AgentEvent;
-          if (event.type === "connected") settle();
+          if (event.type === "connected") settle("connected");
           handleAgentEventRef.current?.(event);
         } catch {
           // ignore
         }
       };
       es.onerror = () => {
-        settle();
-        if (eventSourceRef.current === es && agentRunningRef.current) {
-          es.close();
-          eventSourceRef.current = null;
-          setTimeout(() => {
-            if (agentRunningRef.current) void connectEvents(sid);
-          }, 1000);
+        if (es.readyState === EventSource.CLOSED) {
+          // Fatal error (404/500/content-type mismatch): browser won't
+          // auto-reconnect. Settle the Promise and manually reconnect for
+          // already-running sessions.
+          settle("closed");
+          if (eventSourceRef.current === es && agentRunningRef.current) {
+            eventSourceRef.current = null;
+            setTimeout(() => {
+              if (agentRunningRef.current) void connectEvents(sid);
+            }, 1000);
+          }
         }
+        // Recoverable errors (CONNECTING): let EventSource auto-reconnect.
+        // The timeout above resolves only to let callers decide whether this
+        // connection must be ready before they continue.
       };
     });
   }, []);
+
+  const ensureEventsConnected = useCallback(async (sid: string) => {
+    const result = await connectEvents(sid);
+    if (result.status === "connected" || result.source.readyState === EventSource.OPEN) return;
+    if (eventSourceRef.current === result.source) eventSourceRef.current = null;
+    result.source.close();
+    throw new EventStreamConnectionError(result.status);
+  }, [connectEvents]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -1104,7 +1142,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             setPendingModel(selectedModel);
             await sendAgentCommand(existingSid, { type: "set_model", provider: selectedModel.provider, modelId: selectedModel.modelId });
           }
-          await connectEvents(existingSid);
+          await ensureEventsConnected(existingSid);
           await sendAgentCommand(existingSid, {
             type: "prompt",
             message,
@@ -1131,7 +1169,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const realId = result.sessionId;
           sessionIdRef.current = realId;
           sentSessionId = realId;
-          await connectEvents(realId);
+          await ensureEventsConnected(realId);
           await sendAgentCommand(realId, {
             type: "prompt",
             message,
@@ -1141,7 +1179,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
       } else if (session) {
         sentSessionId = session.id;
-        await connectEvents(session.id);
+        await ensureEventsConnected(session.id);
         await sendAgentCommand(session.id, {
           type: "prompt",
           message,
@@ -1153,13 +1191,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to send message:", e);
+      if (e instanceof EventStreamConnectionError) {
+        const optimisticKey = optimisticUserMessageKeyRef.current;
+        if (optimisticKey) {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            return last?.role === "user" && userMessageKey(last) === optimisticKey
+              ? prev.slice(0, -1)
+              : prev;
+          });
+        }
+        addNotice({ type: "error", message: e.message });
+      }
       optimisticUserMessageKeyRef.current = null;
       agentRunningRef.current = false;
       setAgentRunning(false);
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, connectEvents, promoteNewSession, waitForPromptSettlement]);
+  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1260,6 +1310,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isCompacting, loadSession]);
 
+  const loadModels = useCallback(async (signal?: AbortSignal) => {
+    const modelCwd = newSessionCwd ?? session?.cwd ?? "";
+    const modelsUrl = modelCwd ? `/api/models?cwd=${encodeURIComponent(modelCwd)}` : "/api/models";
+    const res = await fetch(modelsUrl, signal ? { signal } : undefined);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json() as ModelsResponse;
+    setModelNames(d.models);
+    setModelThinkingLevels(d.thinkingLevels ?? {});
+    setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
+    const nextModelList = d.modelList ?? [];
+    setModelList(nextModelList);
+    if (isNew) {
+      const match = d.defaultModel
+        ? nextModelList.find((m) => m.id === d.defaultModel?.modelId && m.provider === d.defaultModel?.provider)
+        : undefined;
+      const displayModel = match ?? nextModelList[0];
+      setNewSessionDefaultModel(displayModel ? { provider: displayModel.provider, modelId: displayModel.id } : null);
+      if (!hasStoredThinkingLevel() && d.defaultThinkingLevel && THINKING_LEVEL_VALUES.has(d.defaultThinkingLevel)) {
+        setThinkingLevel(d.defaultThinkingLevel);
+      }
+    }
+  }, [isNew, newSessionCwd, session?.cwd]);
+
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
     if (!text.startsWith("/")) return { handled: false };
     const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
@@ -1310,6 +1383,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return complete({ handled: true, message: "Compacted context" });
         }
 
+
         case "name": {
           const sid = await getSid();
           if (!sid) return complete({ handled: true, error: "No active session to name" });
@@ -1344,8 +1418,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentRunningRef.current) return complete({ handled: true, error: "Wait for the current response to finish before reloading." });
           if (isCompacting) return complete({ handled: true, error: "Wait for compaction to finish before reloading." });
           await sendAgentCommand(sid, { type: "reload" });
-          await Promise.allSettled([loadSession(sid), loadTools(sid), loadSlashCommands()]);
-          return complete({ handled: true, message: "Reloaded extensions, skills, prompts, and tools" });
+          await Promise.all([
+            loadSession(sid, false, true),
+            loadTools(sid),
+            loadSlashCommands(),
+            loadModels(),
+          ]);
+          return complete({ handled: true, message: "Reloaded session resources" });
         }
 
         case "export": {
@@ -1434,7 +1513,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (didStartCompact) setIsCompacting(false);
     }
-  }, [addNotice, ensureNewSession, handleModelChange, isCompacting, loadSession, loadSlashCommands, loadTools, modelList, onSessionForked, onSessionStatsPanelOpen, onSlashUiAction, promoteNewSession, slashCommands]);
+  }, [addNotice, ensureNewSession, handleModelChange, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, modelList, onSessionForked, onSessionStatsPanelOpen, onSlashUiAction, promoteNewSession, slashCommands]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An
@@ -1658,33 +1737,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   // Load model list
   useEffect(() => {
-    const modelCwd = newSessionCwd ?? session?.cwd ?? "";
-    const modelsUrl = modelCwd ? `/api/models?cwd=${encodeURIComponent(modelCwd)}` : "/api/models";
     const controller = new AbortController();
-    fetch(modelsUrl, { signal: controller.signal }).then((r) => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    }).then((d: ModelsResponse) => {
-      setModelNames(d.models);
-      setModelThinkingLevels(d.thinkingLevels ?? {});
-      setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
-      const nextModelList = d.modelList ?? [];
-      setModelList(nextModelList);
-      if (isNew) {
-        const match = d.defaultModel
-          ? nextModelList.find((m) => m.id === d.defaultModel?.modelId && m.provider === d.defaultModel?.provider)
-          : undefined;
-        const displayModel = match ?? nextModelList[0];
-        setNewSessionDefaultModel(displayModel ? { provider: displayModel.provider, modelId: displayModel.id } : null);
-        if (!hasStoredThinkingLevel() && d.defaultThinkingLevel && THINKING_LEVEL_VALUES.has(d.defaultThinkingLevel)) {
-          setThinkingLevel(d.defaultThinkingLevel);
-        }
-      }
-    }).catch((e) => {
+    loadModels(controller.signal).catch((e) => {
       if (e instanceof DOMException && e.name === "AbortError") return;
     });
     return () => controller.abort();
-  }, [isNew, modelsRefreshKey, newSessionCwd, session?.cwd]);
+  }, [loadModels, modelsRefreshKey]);
 
   // Compact error auto-dismiss
   useEffect(() => {

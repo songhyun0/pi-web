@@ -14,6 +14,7 @@ import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
 import type { SlashUiAction } from "@/lib/slash-command-registry";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
@@ -425,11 +426,13 @@ export function AppShell() {
     }
   }, [selectedSession, router]);
 
-  const handleOpenFile = useCallback((filePath: string, fileName: string) => {
+  const handleOpenFile = useCallback((filePath: string, fileName: string, sourceSessionId?: string | null) => {
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => {
-      if (prev.find((t) => t.id === tabId)) return prev;
-      return [...prev, { id: tabId, label: fileName, filePath }];
+      const existing = prev.find((t) => t.id === tabId);
+      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId }];
+      if (!sourceSessionId || existing.sourceSessionId === sourceSessionId) return prev;
+      return prev.map((t) => t.id === tabId ? { ...t, sourceSessionId } : t);
     });
     setActiveFileTabId(tabId);
     setRightPanelView("file");
@@ -437,6 +440,10 @@ export function AppShell() {
     // On mobile the file panel is full-screen; close the drawer so it shows.
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
+
+  const handleOpenLinkedFile = useCallback((filePath: string) => {
+    handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
+  }, [handleOpenFile, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => {
@@ -1221,6 +1228,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onSlashUiAction={handleSlashUiAction}
               onContextUsageChange={handleContextUsageChange}
+              onOpenFile={handleOpenLinkedFile}
             />
           ) : showPlaceholder ? (
             activeCwd ? (
@@ -1362,7 +1370,11 @@ export function AppShell() {
           ) : rightPanelView === "terminal" ? (
             <TerminalPanel cwd={gitChangesCwd} scopeId={terminalScopeId} />
           ) : activeFileTab?.filePath ? (
-            <FileViewer filePath={activeFileTab.filePath} cwd={activeCwd ?? undefined} />
+            <FileViewer
+              filePath={activeFileTab.filePath}
+              cwd={activeCwd ?? undefined}
+              sourceSessionId={activeFileTab.sourceSessionId}
+            />
           ) : (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
               No file open
