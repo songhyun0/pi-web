@@ -1,5 +1,5 @@
 import { SessionManager, buildSessionContext as piBuildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AgentMessage, SessionEntry, SessionInfo, SessionContext, AssistantMessage } from "./types";
+import type { AgentMessage, SessionEntry, SessionInfo, SessionContext, AssistantMessage, CompactionEntry } from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
 import { resolveProject, type ProjectInfo } from "./worktree";
@@ -128,17 +128,43 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
     }
   }
 
-  // pi injects compaction summary as {role:"compactionSummary", summary, tokensBefore}.
-  // Convert to {role:"user"} so MessageView can render it the same as before.
+  // For display, keep the retained chronological messages and insert a
+  // display-only marker at the actual compaction entry. The session file and
+  // runtime LLM context are unchanged; this only makes compaction visible in UI.
+  if (compactionId) {
+    const displayMessages: AgentMessage[] = [];
+    const displayEntryIds: string[] = [];
+    const appendDisplayEntry = (entry: SessionEntry) => {
+      const message = entryToDisplayMessage(entry);
+      if (!message) return;
+      displayMessages.push(message);
+      displayEntryIds.push(entry.id);
+    };
+
+    const compactionIdx = path.findIndex((e) => e.id === compactionId);
+    const compactionEntry = path[compactionIdx] as CompactionEntry | undefined;
+    const firstKeptIdx = firstKeptEntryId
+      ? path.findIndex((e, i) => i < compactionIdx && e.id === firstKeptEntryId)
+      : -1;
+    const startIdx = firstKeptIdx >= 0 ? firstKeptIdx : compactionIdx;
+
+    for (let i = startIdx; i < compactionIdx; i++) appendDisplayEntry(path[i]);
+    if (compactionEntry?.type === "compaction") {
+      displayMessages.push(createCompactionMarkerMessage(compactionEntry));
+      displayEntryIds.push(compactionEntry.id);
+    }
+    for (let i = compactionIdx + 1; i < path.length; i++) appendDisplayEntry(path[i]);
+
+    return {
+      messages: displayMessages,
+      entryIds: displayEntryIds,
+      thinkingLevel: piCtx.thinkingLevel,
+      model: piCtx.model,
+    };
+  }
+
   const contextMessages = (piCtx.messages as AssistantMessage[]).map((msg) => {
     const raw = msg as unknown as Record<string, unknown>;
-    if (raw.role === "compactionSummary") {
-      return {
-        role: "user" as const,
-        content: `*The conversation history before this point was compacted into the following summary:*\n\n${raw.summary ?? ""}`,
-        timestamp: raw.timestamp as number | undefined,
-      };
-    }
     if (raw.role === "branchSummary") {
       return {
         role: "user" as const,
@@ -157,6 +183,50 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
     thinkingLevel: piCtx.thinkingLevel,
     model: piCtx.model,
   };
+}
+
+function entryToDisplayMessage(entry: SessionEntry): AgentMessage | null {
+  if (entry.type === "message") return normalizeToolCalls(entry.message);
+  if (entry.type === "custom_message") {
+    return {
+      role: "custom",
+      customType: entry.customType,
+      content: entry.content,
+      display: entry.display,
+      details: entry.details,
+      timestamp: timestampToMs(entry.timestamp),
+    };
+  }
+  if (entry.type === "branch_summary" && entry.summary) {
+    return {
+      role: "user",
+      content: `*The conversation briefly explored another branch and returned with this summary:*\n\n${entry.summary}`,
+      timestamp: timestampToMs(entry.timestamp),
+    };
+  }
+  return null;
+}
+
+function createCompactionMarkerMessage(entry: CompactionEntry): AgentMessage {
+  return {
+    role: "custom",
+    customType: "compaction",
+    content: entry.summary,
+    display: true,
+    details: {
+      tokensBefore: entry.tokensBefore,
+      firstKeptEntryId: entry.firstKeptEntryId,
+      fromHook: entry.fromHook,
+      details: entry.details,
+    },
+    timestamp: timestampToMs(entry.timestamp),
+  };
+}
+
+function timestampToMs(timestamp?: string): number | undefined {
+  if (!timestamp) return undefined;
+  const ms = new Date(timestamp).getTime();
+  return Number.isNaN(ms) ? undefined : ms;
 }
 
 function isContextMessageEntry(entry: SessionEntry): boolean {

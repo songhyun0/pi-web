@@ -43,6 +43,12 @@ function formatTime(ts?: number): string | null {
   return `${date} ${time}`;
 }
 
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return tokens.toLocaleString();
+}
+
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -74,7 +80,11 @@ export function MessageView({ message, isStreaming, toolResults, modelNames, ent
     return null;
   }
   if (message.role === "custom") {
-    return <CustomMessageView message={message as CustomMessage} />;
+    const customMessage = message as CustomMessage;
+    if (customMessage.customType === "compaction") {
+      return <CompactionMarkerView message={customMessage} />;
+    }
+    return <CustomMessageView message={customMessage} />;
   }
   return null;
 }
@@ -1061,6 +1071,65 @@ function PairedResult({ text, isEmpty, isError }: {
       >
         {isEmpty ? "(no output)" : text}
       </pre>
+    </div>
+  );
+}
+
+function CompactionMarkerView({ message }: { message: CustomMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = getMessageText(message.content);
+  const details = isRecord(message.details) ? message.details : {};
+  const tokensBefore = typeof details.tokensBefore === "number" ? details.tokensBefore : null;
+  const time = formatTime(message.timestamp);
+
+  return (
+    <div style={{ margin: "18px 0", display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ height: 1, flex: 1, background: "linear-gradient(to right, transparent, var(--border))" }} />
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          title="Show compaction summary"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "5px 10px",
+            border: "1px solid color-mix(in srgb, var(--accent) 24%, var(--border))",
+            borderRadius: 999,
+            background: "color-mix(in srgb, var(--accent) 6%, var(--bg))",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 12,
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
+            <path d="M4 7h16" />
+            <path d="M7 12h10" />
+            <path d="M10 17h4" />
+          </svg>
+          <span>Conversation compacted here</span>
+          {tokensBefore !== null && <span style={{ color: "var(--text-dim)" }}>{formatTokenCount(tokensBefore)} tokens before</span>}
+          {time && <span style={{ color: "var(--text-dim)" }}>{time}</span>}
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+            <polyline points="2 3.5 5 6.5 8 3.5" />
+          </svg>
+        </button>
+        <div style={{ height: 1, flex: 1, background: "linear-gradient(to left, transparent, var(--border))" }} />
+      </div>
+
+      {expanded && (
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          background: "var(--bg-panel)",
+          padding: "10px 12px",
+          color: "var(--text-muted)",
+          fontSize: 13,
+        }}>
+          <div style={{ marginBottom: 6, color: "var(--text-dim)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>Compaction summary</div>
+          {summary ? <MarkdownBody className="markdown-custom-message">{summary}</MarkdownBody> : <span style={{ color: "var(--text-dim)" }}>(no summary)</span>}
+        </div>
+      )}
     </div>
   );
 }
