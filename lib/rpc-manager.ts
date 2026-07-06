@@ -519,6 +519,20 @@ export class AgentSessionWrapper {
         return { commands };
       }
 
+      case "toggle_openai_fast": {
+        await this.waitForExtensionsBound();
+        const hasFastCommand = this.inner.extensionRunner
+          .getRegisteredCommands()
+          .some((registered) => registered.invocationName === "fast");
+        if (!hasFastCommand) throw new Error("OpenAI Fast extension is not available in this session. Install or reload the openai-fast plugin.");
+
+        await this.inner.prompt("/fast", { source: "rpc" });
+        return {
+          extensionStatuses: this.extensionUi.getStatuses(),
+          extensionWidgets: this.extensionUi.getWidgets(),
+        };
+      }
+
       case "set_tools": {
         const toolNames = command.toolNames as string[];
         this.setForceEmptySystemPrompt(toolNames.length === 0);

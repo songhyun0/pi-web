@@ -81,6 +81,11 @@ interface ForkCandidatesResponse {
   messages?: ForkCandidate[];
 }
 
+type OpenAIFastToggleResponse = {
+  extensionStatuses?: ExtensionStatusItem[];
+  extensionWidgets?: ExtensionWidgetItem[];
+};
+
 type AgentStateResponse = {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
@@ -1388,6 +1393,37 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew, setNewSessionModel]);
 
+  const handleOpenAIFastToggle = useCallback(async () => {
+    if (agentRunningRef.current) {
+      addNotice({ type: "warning", message: "Wait for the current response to finish before changing Fast mode." });
+      return;
+    }
+
+    const sid = sessionIdRef.current ?? await ensureNewSession();
+    if (!sid) {
+      addNotice({ type: "error", message: "No active session for OpenAI Fast mode." });
+      return;
+    }
+
+    try {
+      const result = await sendAgentCommand<OpenAIFastToggleResponse>(sid, { type: "toggle_openai_fast" });
+      if (result?.extensionStatuses) setExtensionStatuses(result.extensionStatuses);
+      if (result?.extensionWidgets) setExtensionWidgets(result.extensionWidgets);
+
+      const statusText = result?.extensionStatuses
+        ?.find((status) => status.key === "openai-fast")
+        ?.text.toLowerCase();
+      addNotice({
+        type: "info",
+        message: statusText?.includes("fast")
+          ? "OpenAI Fast mode enabled"
+          : "OpenAI Fast mode disabled",
+      });
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [addNotice, ensureNewSession]);
+
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid || isCompacting) return;
@@ -1896,7 +1932,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
-    handleBuiltinSlashCommand,
+    handleBuiltinSlashCommand, handleOpenAIFastToggle,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions

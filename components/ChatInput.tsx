@@ -35,6 +35,10 @@ interface Props {
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
+  showOpenAIFastToggle?: boolean;
+  openAIFastStatus?: string | null;
+  openAIFastEligible?: boolean;
+  onOpenAIFastToggle?: () => void | Promise<void>;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -177,6 +181,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, onModelChange,
+  showOpenAIFastToggle, openAIFastStatus, openAIFastEligible, onOpenAIFastToggle,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, onRecallQueue,
@@ -192,6 +197,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
+  const [fastToggleBusy, setFastToggleBusy] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() => (
@@ -392,6 +398,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     onSend(msg, attachedImages.length ? attachedImages : undefined);
     clearInput();
   }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  const handleOpenAIFastClick = useCallback(async () => {
+    if (isStreaming || fastToggleBusy || !onOpenAIFastToggle || openAIFastEligible === false) return;
+    onAudioUnlock?.();
+    setFastToggleBusy(true);
+    try {
+      await onOpenAIFastToggle();
+    } finally {
+      setFastToggleBusy(false);
+    }
+  }, [fastToggleBusy, isStreaming, onAudioUnlock, onOpenAIFastToggle, openAIFastEligible]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -827,6 +843,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return thinkingLevelMap[lvl] ?? lvl;
   })();
   const toolPresetLabel = Object.entries(TOOL_PRESET_MAP).find(([, v]) => v === (toolPreset ?? "default"))?.[0] ?? "default";
+  const normalizedOpenAIFastStatus = (openAIFastStatus ?? "").toLowerCase();
+  const openAIFastActive = normalizedOpenAIFastStatus.includes("fast")
+    && !normalizedOpenAIFastStatus.includes("unavailable")
+    && !normalizedOpenAIFastStatus.includes("normal");
+  const openAIFastUnavailable = openAIFastEligible === false
+    || normalizedOpenAIFastStatus.includes("unavailable")
+    || normalizedOpenAIFastStatus.includes("n/a");
+  const openAIFastButtonDisabled = isStreaming || fastToggleBusy || !onOpenAIFastToggle || openAIFastUnavailable;
+  const openAIFastLabel = openAIFastUnavailable ? "Fast N/A" : openAIFastActive ? "⚡ Fast" : "Normal";
+  const openAIFastCompactLabel = openAIFastUnavailable ? "N/A" : openAIFastActive ? "Fast" : "Norm";
+  const openAIFastTitle = openAIFastUnavailable
+    ? "OpenAI Fast mode is unavailable for the current model"
+    : openAIFastActive
+      ? "OpenAI Fast mode is active. Click to switch to normal mode."
+      : "OpenAI Fast mode is normal. Click to enable Fast mode.";
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -1527,6 +1558,47 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     );
                   })()}
                 </div>
+            )}
+            {showOpenAIFastToggle && (
+              <button
+                type="button"
+                onClick={handleOpenAIFastClick}
+                disabled={openAIFastButtonDisabled}
+                title={openAIFastTitle}
+                aria-label="Toggle OpenAI Fast mode"
+                aria-pressed={openAIFastActive}
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 5,
+                  height: 32,
+                  padding: isMobile ? "0 8px" : "8px 10px",
+                  background: openAIFastActive ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none",
+                  border: `1px solid ${openAIFastActive ? "color-mix(in srgb, var(--accent) 45%, var(--border))" : "transparent"}`,
+                  borderRadius: 9,
+                  color: openAIFastActive ? "var(--accent)" : "var(--text-muted)",
+                  cursor: openAIFastButtonDisabled ? "not-allowed" : "pointer",
+                  fontSize: 12,
+                  fontWeight: openAIFastActive ? 600 : 500,
+                  opacity: openAIFastButtonDisabled ? 0.5 : 1,
+                  whiteSpace: "nowrap",
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (openAIFastButtonDisabled) return;
+                  e.currentTarget.style.background = openAIFastActive ? "color-mix(in srgb, var(--accent) 16%, transparent)" : "var(--bg-hover)";
+                  e.currentTarget.style.color = openAIFastActive ? "var(--accent)" : "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = openAIFastActive ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none";
+                  e.currentTarget.style.color = openAIFastActive ? "var(--accent)" : "var(--text-muted)";
+                }}
+              >
+                <span aria-hidden="true">⚡</span>
+                <span>{isMobile ? openAIFastCompactLabel : openAIFastLabel}</span>
+              </button>
             )}
           </div>
 

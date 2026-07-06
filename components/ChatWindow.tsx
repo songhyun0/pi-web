@@ -192,7 +192,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
-    handleBuiltinSlashCommand,
+    handleBuiltinSlashCommand, handleOpenAIFastToggle,
     handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
@@ -258,6 +258,12 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
+  const openAIFastStatus = extensionStatuses.find((status) => status.key === "openai-fast")?.text ?? null;
+  const openAIFastEligible = displayModelValue
+    ? displayModelValue.provider === "openai-codex" && ["gpt-5.4", "gpt-5.5"].includes(displayModelValue.modelId)
+    : undefined;
+  const showOpenAIFastToggle = openAIFastEligible || openAIFastStatus !== null;
+
   useEffect(() => {
     if (!treeSelectorOpen) return;
     const sid = data?.sessionId ?? session?.id ?? null;
@@ -311,6 +317,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       isAutoModelSelection={isAutoModelSelection}
       modelNames={modelNames}
       modelList={modelList}
+      showOpenAIFastToggle={showOpenAIFastToggle}
+      openAIFastStatus={openAIFastStatus}
+      openAIFastEligible={openAIFastEligible}
+      onOpenAIFastToggle={showOpenAIFastToggle ? handleOpenAIFastToggle : undefined}
       onModelChange={handleModelChange}
       onCompact={session || isNew ? handleCompact : undefined}
       onAbortCompaction={handleAbortCompaction}
