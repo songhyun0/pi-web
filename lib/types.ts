@@ -292,3 +292,39 @@ export interface SessionContext {
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
 }
+
+export type GitChangeStatus = "M" | "A" | "D" | "R" | "C" | "U" | "?";
+
+export interface GitChangeFile {
+  path: string;
+  oldPath?: string;
+  status: GitChangeStatus;
+  additions: number | null;
+  deletions: number | null;
+  binary?: boolean;
+  staged?: boolean;
+  unstaged?: boolean;
+  untracked?: boolean;
+}
+
+export interface GitChangesResponse {
+  isGit: boolean;
+  repoRoot: string | null;
+  branch: string | null;
+  base: "HEAD" | "index";
+  scopePath: string | null;
+  totals: { files: number; additions: number; deletions: number };
+  files: GitChangeFile[];
+  error?: string;
+}
+
+export interface GitDiffResponse {
+  isGit: boolean;
+  repoRoot: string;
+  branch: string | null;
+  base: "HEAD" | "index";
+  path: string;
+  diff: string;
+  binary?: boolean;
+  error?: string;
+}

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
+import { GitChangesPanel } from "./GitChangesPanel";
 import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
@@ -146,10 +147,12 @@ export function AppShell() {
     return () => ro.disconnect();
   }, [activeTopPanel]);
 
-  // Right panel — file tabs only
+  // Right panel — changes review plus file tabs
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelView, setRightPanelView] = useState<"changes" | "file">("changes");
+  const [gitChangesCount, setGitChangesCount] = useState<number | null>(null);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -293,6 +296,7 @@ export function AppShell() {
       return [...prev, { id: tabId, label: fileName, filePath }];
     });
     setActiveFileTabId(tabId);
+    setRightPanelView("file");
     setRightPanelOpen(true);
     // On mobile the file panel is full-screen; close the drawer so it shows.
     if (isMobile) setSidebarOpen(false);
@@ -301,7 +305,7 @@ export function AppShell() {
   const handleCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0) setRightPanelOpen(false);
+      if (next.length === 0) setRightPanelView("changes");
       return next;
     });
     setActiveFileTabId((cur) => {
@@ -310,6 +314,12 @@ export function AppShell() {
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
   }, [fileTabs]);
+
+  const handleOpenChanges = useCallback(() => {
+    setRightPanelView("changes");
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
 
   const handleExportSession = useCallback(() => {
     if (!selectedSession) return;
@@ -323,6 +333,28 @@ export function AppShell() {
   const showPlaceholder = initialSessionRestored && !showChat;
 
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
+  const gitChangesCwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!gitChangesCwd) {
+      setGitChangesCount(null);
+      return;
+    }
+    fetch(`/api/git/changes?cwd=${encodeURIComponent(gitChangesCwd)}`, { cache: "no-store" })
+      .then(async (res) => {
+        const data = await res.json() as { isGit?: boolean; totals?: { files: number }; error?: string };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        return data;
+      })
+      .then((data) => {
+        if (!cancelled) setGitChangesCount(data.isGit ? data.totals?.files ?? 0 : null);
+      })
+      .catch(() => {
+        if (!cancelled) setGitChangesCount(null);
+      });
+    return () => { cancelled = true; };
+  }, [gitChangesCwd, explorerRefreshKey]);
 
   const sidebarContent = (
     <>
@@ -1013,20 +1045,71 @@ export function AppShell() {
       >
         {/* Right panel tab bar */}
         <div style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
+          <button
+            onClick={handleOpenChanges}
+            title="View uncommitted changes"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              height: 36,
+              padding: "0 12px",
+              border: "none",
+              borderRight: "1px solid var(--border)",
+              background: rightPanelView === "changes" ? "var(--bg)" : "var(--bg-panel)",
+              color: rightPanelView === "changes" ? "var(--text)" : "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              userSelect: "none",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: rightPanelView === "changes" ? 1 : 0.75 }}>
+              <path d="M16 3h5v5" />
+              <path d="M8 21H3v-5" />
+              <path d="M21 3l-7 7" />
+              <path d="M3 21l7-7" />
+              <path d="M14 3h-4a4 4 0 0 0-4 4v10" />
+            </svg>
+            <span style={{ fontWeight: rightPanelView === "changes" ? 500 : 400 }}>Changes</span>
+            {gitChangesCount !== null && gitChangesCount > 0 && (
+              <span style={{
+                minWidth: 17,
+                height: 17,
+                padding: "0 5px",
+                borderRadius: 999,
+                background: "var(--bg-selected)",
+                color: "var(--text-muted)",
+                fontSize: 10,
+                lineHeight: "17px",
+                textAlign: "center",
+                fontFamily: "var(--font-mono)",
+              }}>
+                {gitChangesCount}
+              </span>
+            )}
+          </button>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
               tabs={fileTabs}
-              activeTabId={activeFileTabId ?? ""}
-              onSelectTab={setActiveFileTabId}
+              activeTabId={rightPanelView === "file" ? activeFileTabId ?? "" : ""}
+              onSelectTab={(id) => {
+                setActiveFileTabId(id);
+                setRightPanelView("file");
+                setRightPanelOpen(true);
+              }}
               onCloseTab={handleCloseFileTab}
             />
           </div>
 
         </div>
 
-        {/* File content */}
+        {/* Right panel content */}
         <div style={{ flex: 1, overflow: "hidden" }}>
-          {activeFileTab?.filePath ? (
+          {rightPanelView === "changes" ? (
+            <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
+          ) : activeFileTab?.filePath ? (
             <FileViewer filePath={activeFileTab.filePath} cwd={activeCwd ?? undefined} />
           ) : (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
@@ -1038,9 +1121,13 @@ export function AppShell() {
     </div>
     {/* File panel toggle — always visible at top-right */}
     <button
-      onClick={() => setRightPanelOpen((v) => !v)}
-      title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
-      aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}
+      onClick={() => setRightPanelOpen((v) => {
+        const next = !v;
+        if (next && !activeFileTabId) setRightPanelView("changes");
+        return next;
+      })}
+      title={rightPanelOpen ? "Hide right panel" : "Show right panel"}
+      aria-label={rightPanelOpen ? "Hide right panel" : "Show right panel"}
       style={{
         position: "fixed", top: 0, right: 0, zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",
