@@ -87,13 +87,14 @@ export interface ExtensionUiContextLike {
   input(title: string, placeholder?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
   editor(title: string, prefill?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
   notify(message: string, type?: "info" | "warning" | "error"): void;
-  onTerminalInput(): () => void;
+  onTerminalInput(handler?: (data: string) => void): () => void;
+  requestRender?: () => void;
   setStatus(key: string, text: string | undefined): void;
   setWorkingMessage(message?: string): void;
   setWorkingVisible(visible: boolean): void;
   setWorkingIndicator(options?: { frames?: string[]; intervalMs?: number }): void;
   setHiddenThinkingLabel(label?: string): void;
-  setWidget(key: string, content: string[] | ((...args: never[]) => unknown) | undefined, options?: WidgetOptionsLike): void;
+  setWidget(key: string, content: unknown, options?: WidgetOptionsLike): void;
   setFooter(factory: unknown): void;
   setHeader(factory: unknown): void;
   setTitle(title: string): void;

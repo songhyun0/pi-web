@@ -779,6 +779,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  const sendExtensionCustomResize = useCallback(async (request: ExtensionUiCustomRequest, size: { columns: number; rows: number }) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, {
+        type: "extension_ui_resize",
+        id: request.id,
+        columns: size.columns,
+        rows: size.rows,
+      });
+    } catch (e) {
+      console.error("Failed to send extension custom UI resize:", e);
+    }
+  }, []);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -1785,7 +1800,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,

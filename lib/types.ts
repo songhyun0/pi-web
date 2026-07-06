@@ -171,6 +171,8 @@ export type ExtensionUiRequest =
       id: string;
       method: "custom";
       lines: string[];
+      columns?: number;
+      rows?: number;
       closed?: boolean;
     };
 

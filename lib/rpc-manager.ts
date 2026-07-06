@@ -3,9 +3,10 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { cacheSessionPath } from "./session-reader";
 import { loadPiBuiltinSlashCommands } from "./pi-builtin-slash-commands";
+import { ExtensionUiBridge } from "./extension-ui-bridge";
 import type { SlashCommandInfo } from "./slash-command-registry";
-import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
-import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
+import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import type { ExtensionUiRequest, ExtensionUiResponse } from "./types";
 
 // ============================================================================
 // Types
@@ -18,30 +19,6 @@ export interface AgentEvent {
 
 type EventListener = (event: AgentEvent) => void;
 
-type PendingUiResponse = {
-  resolve: (response: ExtensionUiResponse) => void;
-  cancel: () => void;
-};
-
-type CustomUiComponent = {
-  render: (width: number) => string[];
-  handleInput?: (data: string) => void;
-  dispose?: () => void;
-  invalidate?: () => void;
-};
-
-type ActiveCustomUi = {
-  component: CustomUiComponent;
-  width: number;
-  resolve: (value: unknown) => void;
-  settled: boolean;
-};
-
-type ExtensionUiRequestBody = Record<string, unknown> & {
-  method: ExtensionUiRequest["method"];
-  timeout?: number;
-  expiresAt?: number;
-};
 
 type ExtensionCommandContextActionsLike = {
   waitForIdle: () => Promise<void>;
@@ -91,11 +68,7 @@ function extractUserMessageText(content: unknown): string {
 
 export class AgentSessionWrapper {
   private listeners: EventListener[] = [];
-  private pendingUiResponses = new Map<string, PendingUiResponse>();
-  private pendingUiRequests = new Map<string, AgentEvent>();
-  private activeCustomUis = new Map<string, ActiveCustomUi>();
-  private extensionStatuses = new Map<string, string>();
-  private extensionWidgets = new Map<string, ExtensionWidgetItem>();
+  private readonly extensionUi: ExtensionUiBridge;
   private promptRunning = false;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
@@ -106,7 +79,9 @@ export class AgentSessionWrapper {
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
 
-  constructor(public readonly inner: AgentSessionLike) {}
+  constructor(public readonly inner: AgentSessionLike) {
+    this.extensionUi = new ExtensionUiBridge({ emit: (event) => this.emit(event as AgentEvent) });
+  }
 
   get sessionId(): string {
     return this.inner.sessionId;
@@ -158,10 +133,10 @@ export class AgentSessionWrapper {
     this.extensionBindingError = null;
     this.extensionBindingPromise = (async () => {
       if (!this._alive) return;
-      const uiContext = this.createExtensionUiContext();
+      const uiContext = this.extensionUi.createContext();
       if (typeof this.inner.bindExtensions === "function") {
         const bindExtensions = this.inner.bindExtensions as (bindings: {
-          uiContext?: ExtensionUiContextLike;
+          uiContext?: unknown;
           mode?: "rpc";
           commandContextActions?: ExtensionCommandContextActionsLike;
           shutdownHandler?: () => void;
@@ -241,7 +216,7 @@ export class AgentSessionWrapper {
 
   onEvent(listener: EventListener): () => void {
     this.listeners.push(listener);
-    for (const event of this.pendingUiRequests.values()) listener(event);
+    for (const event of this.extensionUi.getPendingRequests()) listener(event as AgentEvent);
     return () => {
       const i = this.listeners.indexOf(listener);
       if (i !== -1) this.listeners.splice(i, 1);
@@ -311,8 +286,8 @@ export class AgentSessionWrapper {
             : null,
           systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
-          extensionStatuses: this.getExtensionStatuses(),
-          extensionWidgets: this.getExtensionWidgets(),
+          extensionStatuses: this.extensionUi.getStatuses(),
+          extensionWidgets: this.extensionUi.getWidgets(),
         };
       }
 
@@ -532,11 +507,10 @@ export class AgentSessionWrapper {
 
       case "reload": {
         await this.waitForExtensionsBound();
-        this.extensionStatuses.clear();
-        this.extensionWidgets.clear();
+        this.extensionUi.clearPersistentUi();
         await this.inner.reload();
         if (typeof this.inner.bindExtensions !== "function") {
-          this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
+          this.inner.extensionRunner.setUIContext?.(this.extensionUi.createContext(), "rpc");
         }
         this.applyForcedEmptySystemPrompt();
         return { success: true };
@@ -548,12 +522,20 @@ export class AgentSessionWrapper {
       }
 
       case "extension_ui_response": {
-        this.resolveExtensionUiResponse(command as ExtensionUiResponse);
+        this.extensionUi.resolveExtensionUiResponse(command as ExtensionUiResponse);
         return null;
       }
 
       case "extension_ui_input": {
-        this.handleExtensionUiInput(command.id as string, command.data as string);
+        this.extensionUi.handleExtensionUiInput(command.id as string, command.data as string);
+        return null;
+      }
+
+      case "extension_ui_resize": {
+        this.extensionUi.handleExtensionUiResize(command.id as string, {
+          columns: command.columns,
+          rows: command.rows,
+        });
         return null;
       }
 
@@ -572,297 +554,11 @@ export class AgentSessionWrapper {
     this._alive = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.unsubscribe?.();
-    for (const pending of this.pendingUiResponses.values()) pending.cancel();
-    for (const id of Array.from(this.activeCustomUis.keys())) this.closeCustomUi(id, undefined);
-    this.pendingUiResponses.clear();
-    this.pendingUiRequests.clear();
+    this.extensionUi.destroy();
     this.onDestroyCallback?.();
     notifyRunningChange();
   }
 
-  private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
-    const pending = this.pendingUiResponses.get(response.id);
-    if (!pending) return;
-    pending.resolve(response);
-  }
-
-  private getExtensionStatuses(): Array<{ key: string; text: string }> {
-    return Array.from(this.extensionStatuses, ([key, text]) => ({ key, text }));
-  }
-
-  private getExtensionWidgets(): ExtensionWidgetItem[] {
-    return Array.from(this.extensionWidgets.values());
-  }
-
-  private getCustomUiWidth(options: unknown): number {
-    if (!options || typeof options !== "object") return 92;
-    const overlayOptions = (options as { overlayOptions?: unknown }).overlayOptions;
-    const resolved = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
-    if (!resolved || typeof resolved !== "object") return 92;
-    const width = (resolved as { width?: unknown }).width;
-    return typeof width === "number" && Number.isFinite(width)
-      ? Math.max(40, Math.min(140, Math.round(width)))
-      : 92;
-  }
-
-  private emitCustomUiRender(id: string, custom: ActiveCustomUi): void {
-    let lines: string[];
-    try {
-      lines = custom.component.render(custom.width);
-    } catch (error) {
-      lines = [`Extension custom UI render failed: ${error instanceof Error ? error.message : String(error)}`];
-    }
-    const event = {
-      type: "extension_ui_request",
-      id,
-      method: "custom",
-      lines,
-    } as ExtensionUiRequest as AgentEvent;
-    this.pendingUiRequests.set(id, event);
-    this.emit(event);
-  }
-
-  private closeCustomUi(id: string, value: unknown): void {
-    const custom = this.activeCustomUis.get(id);
-    if (!custom || custom.settled) return;
-    custom.settled = true;
-    this.activeCustomUis.delete(id);
-    this.pendingUiRequests.delete(id);
-    try {
-      custom.component.dispose?.();
-    } catch {
-      // Ignore dispose errors from extension UI components.
-    }
-    this.emit({
-      type: "extension_ui_request",
-      id,
-      method: "custom",
-      lines: [],
-      closed: true,
-    } as ExtensionUiRequest as AgentEvent);
-    custom.resolve(value);
-  }
-
-  private handleExtensionUiInput(id: string, data: string): void {
-    const custom = this.activeCustomUis.get(id);
-    if (!custom || typeof data !== "string") return;
-    try {
-      custom.component.handleInput?.(data);
-      if (this.activeCustomUis.has(id)) this.emitCustomUiRender(id, custom);
-    } catch (error) {
-      this.closeCustomUi(id, undefined);
-      this.emit({
-        type: "extension_error",
-        extensionPath: `custom-ui:${id}`,
-        event: "custom_ui_input",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private requestExtensionCustomUi<T>(
-    factory: unknown,
-    options?: unknown,
-  ): Promise<T> {
-    if (typeof factory !== "function") return Promise.resolve(undefined as T);
-
-    const id = randomUUID();
-    const width = this.getCustomUiWidth(options);
-
-    return new Promise<T>((resolve) => {
-      const tui = {
-        requestRender: () => {
-          const custom = this.activeCustomUis.get(id);
-          if (custom) this.emitCustomUiRender(id, custom);
-        },
-      };
-      const done = (value: T) => this.closeCustomUi(id, value);
-
-      Promise.resolve()
-        .then(() => factory(tui, undefined, undefined, done))
-        .then((component) => {
-          if (!component || typeof component !== "object" || typeof (component as CustomUiComponent).render !== "function") {
-            resolve(undefined as T);
-            return;
-          }
-          const custom: ActiveCustomUi = {
-            component: component as CustomUiComponent,
-            width,
-            resolve: (value) => resolve(value as T),
-            settled: false,
-          };
-          this.activeCustomUis.set(id, custom);
-          this.emitCustomUiRender(id, custom);
-        })
-        .catch((error) => {
-          this.emit({
-            type: "extension_error",
-            extensionPath: `custom-ui:${id}`,
-            event: "custom_ui",
-            error: error instanceof Error ? error.message : String(error),
-          });
-          resolve(undefined as T);
-        });
-    });
-  }
-
-  private requestExtensionUi<T>(
-    request: ExtensionUiRequestBody,
-    defaultValue: T,
-    parseResponse: (response: ExtensionUiResponse) => T,
-    timeout?: number,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    if (signal?.aborted) return Promise.resolve(defaultValue);
-
-    const id = randomUUID();
-    const fullRequest = {
-      type: "extension_ui_request",
-      id,
-      ...request,
-      ...(timeout ? { timeout, expiresAt: Date.now() + timeout } : {}),
-    };
-
-    return new Promise((resolve) => {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        if (timeoutId) clearTimeout(timeoutId);
-        signal?.removeEventListener("abort", onAbort);
-        this.pendingUiRequests.delete(id);
-        this.pendingUiResponses.delete(id);
-      };
-      const settle = (value: T) => {
-        cleanup();
-        resolve(value);
-      };
-      const onAbort = () => settle(defaultValue);
-
-      if (timeout) timeoutId = setTimeout(() => settle(defaultValue), timeout);
-      signal?.addEventListener("abort", onAbort, { once: true });
-
-      this.pendingUiRequests.set(id, fullRequest as AgentEvent);
-      this.pendingUiResponses.set(id, {
-        resolve: (response) => settle(parseResponse(response)),
-        cancel: () => settle(defaultValue),
-      });
-      this.emit(fullRequest as AgentEvent);
-    });
-  }
-
-  private createExtensionUiContext(): ExtensionUiContextLike {
-    return {
-      select: (title, options, opts) => this.requestExtensionUi(
-        { method: "select", title, options, ...(opts?.timeout ? { timeout: opts.timeout } : {}) },
-        undefined,
-        (response) => "value" in response ? response.value : undefined,
-        opts?.timeout,
-        opts?.signal,
-      ),
-      confirm: (title, message, opts) => this.requestExtensionUi(
-        { method: "confirm", title, message, ...(opts?.timeout ? { timeout: opts.timeout } : {}) },
-        false,
-        (response) => "confirmed" in response ? response.confirmed : false,
-        opts?.timeout,
-        opts?.signal,
-      ),
-      input: (title, placeholder, opts) => this.requestExtensionUi(
-        { method: "input", title, ...(placeholder !== undefined ? { placeholder } : {}), ...(opts?.timeout ? { timeout: opts.timeout } : {}) },
-        undefined,
-        (response) => "value" in response ? response.value : undefined,
-        opts?.timeout,
-        opts?.signal,
-      ),
-      editor: (title, prefill, opts) => this.requestExtensionUi(
-        { method: "editor", title, ...(prefill !== undefined ? { prefill } : {}), ...(opts?.timeout ? { timeout: opts.timeout } : {}) },
-        undefined,
-        (response) => "value" in response ? response.value : undefined,
-        opts?.timeout,
-        opts?.signal,
-      ),
-      notify: (message, type) => {
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "notify",
-          message,
-          notifyType: type,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      onTerminalInput: () => () => {},
-      setStatus: (key, text) => {
-        if (text === undefined) this.extensionStatuses.delete(key);
-        else this.extensionStatuses.set(key, text);
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "setStatus",
-          statusKey: key,
-          statusText: text,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      setWorkingMessage: () => {},
-      setWorkingVisible: () => {},
-      setWorkingIndicator: () => {},
-      setHiddenThinkingLabel: () => {},
-      setWidget: (key, content, options) => {
-        if (content !== undefined && !Array.isArray(content)) return;
-        if (content === undefined) {
-          this.extensionWidgets.delete(key);
-        } else {
-          this.extensionWidgets.set(key, {
-            key,
-            lines: content,
-            placement: options?.placement ?? "aboveEditor",
-          });
-        }
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "setWidget",
-          widgetKey: key,
-          widgetLines: content,
-          widgetPlacement: options?.placement,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      setFooter: () => {},
-      setHeader: () => {},
-      setTitle: (title) => {
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "setTitle",
-          title,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      custom: <T = unknown>(factory: unknown, options?: unknown) => this.requestExtensionCustomUi<T>(factory, options),
-      pasteToEditor: (text) => {
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "set_editor_text",
-          text,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      setEditorText: (text) => {
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "set_editor_text",
-          text,
-        } as ExtensionUiRequest as AgentEvent);
-      },
-      getEditorText: () => "",
-      addAutocompleteProvider: () => {},
-      setEditorComponent: () => {},
-      getEditorComponent: () => undefined,
-      get theme() { return undefined; },
-      getAllThemes: () => [],
-      getTheme: () => undefined,
-      setTheme: () => ({ success: false, error: "Theme switching is not supported in pi-web extension UI yet" }),
-      getToolsExpanded: () => false,
-      setToolsExpanded: () => {},
-    };
-  }
 
   private createExtensionCommandContextActions(): ExtensionCommandContextActionsLike {
     return {
@@ -878,11 +574,10 @@ export class AgentSessionWrapper {
       },
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
-        this.extensionStatuses.clear();
-        this.extensionWidgets.clear();
+        this.extensionUi.clearPersistentUi();
         await this.inner.reload({
           beforeSessionStart: () => {
-            this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
+            this.inner.extensionRunner.setUIContext?.(this.extensionUi.createContext(), "rpc");
           },
         });
         this.applyForcedEmptySystemPrompt();
