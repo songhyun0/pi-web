@@ -8,6 +8,13 @@ interface Props {
   scopeId: string | null | undefined;
 }
 
+interface TerminalFontFace {
+  cssFamily: string;
+  sourceFamily: string;
+  url: string;
+  weight: number;
+  style: "normal" | "italic";
+}
 
 interface TerminalFontConfig {
   fontFamilies: string[];
@@ -16,6 +23,7 @@ interface TerminalFontConfig {
   wsUrl?: string;
   controlUrl?: string;
   shellsUrl?: string;
+  fontFaces?: TerminalFontFace[];
   error?: string;
 }
 
@@ -34,14 +42,64 @@ interface ShellTab {
 
 type TerminalStatus = "idle" | "loading" | "connecting" | "connected" | "disconnected" | "error";
 
+const loadedFontFamilies = new Set<string>();
+
 function quoteFontFamily(name: string): string {
   return `"${name.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 }
 
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function buildFontFamily(config: TerminalFontConfig | null): string {
-  const families = config?.fontFamilies?.filter(Boolean) ?? [];
-  const quoted = families.map(quoteFontFamily);
-  return [...quoted, "monospace"].join(", ");
+  const cssFamilies = unique(config?.fontFaces?.map((face) => face.cssFamily) ?? []);
+  if (cssFamilies.length > 0) return cssFamilies.map(quoteFontFamily).join(", ");
+
+  const configuredFamilies = unique(config?.fontFamilies ?? []);
+  if (configuredFamilies.length > 0) return configuredFamilies.map(quoteFontFamily).join(", ");
+
+  return "monospace";
+}
+
+async function loadTerminalFontFaces(faces: TerminalFontFace[] | undefined, fontSize: number): Promise<void> {
+  if (!faces?.length || typeof FontFace === "undefined" || !document.fonts) return;
+
+  const styleId = "pi-terminal-font-faces";
+  let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+  if (!styleEl) {
+    styleEl = document.createElement("style");
+    styleEl.id = styleId;
+    document.head.appendChild(styleEl);
+  }
+
+  const cssRules: string[] = [];
+  for (const face of faces) {
+    const absoluteUrl = new URL(face.url, window.location.href).href;
+    cssRules.push(`@font-face{font-family:${quoteFontFamily(face.cssFamily)};src:url(${JSON.stringify(absoluteUrl)});font-weight:${face.weight};font-style:${face.style};font-display:block;}`);
+  }
+  styleEl.textContent = cssRules.join("\n");
+
+  await Promise.all(faces.map(async (face) => {
+    const cacheKey = `${face.cssFamily}:${face.weight}:${face.style}`;
+    if (loadedFontFamilies.has(cacheKey)) return;
+    const absoluteUrl = new URL(face.url, window.location.href).href;
+    try {
+      const font = new FontFace(face.cssFamily, `url(${JSON.stringify(absoluteUrl)})`, {
+        weight: String(face.weight),
+        style: face.style,
+        display: "block",
+      });
+      await font.load();
+      document.fonts.add(font);
+      await document.fonts.load(`${face.style} ${face.weight} ${fontSize}px ${quoteFontFamily(face.cssFamily)}`);
+      loadedFontFamilies.add(cacheKey);
+    } catch (error) {
+      console.warn("Failed to load terminal font", face, error);
+    }
+  }));
+
+  await document.fonts.ready;
 }
 
 function basename(filePath: string | null | undefined): string {
@@ -93,7 +151,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
   const [connectVersion, setConnectVersion] = useState(0);
 
   const fontFamily = useMemo(() => buildFontFamily(fontConfig), [fontConfig]);
-  const fontSize = fontConfig?.fontSize ?? 16;
+  const fontSize = fontConfig?.fontSize ?? 14;
   const activeShell = shellTabs.find((tab) => tab.shellId === activeShellId) ?? null;
   const activeShellTitle = activeShell?.title ?? "Shell";
 
@@ -112,7 +170,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
         if (!cancelled) {
           setFontConfig({
             fontFamilies: ["MesloLGS NF", "D2CodingLigature Nerd Font Mono"],
-            fontSize: 16,
+            fontSize: 14,
             configPath: null,
           });
         }
@@ -262,6 +320,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
       terminalContainer.innerHTML = "";
 
       try {
+        await loadTerminalFontFaces(terminalFontConfig.fontFaces, fontSize);
         const { Ghostty, Terminal, FitAddon } = await import("ghostty-web");
         const ghostty = await Ghostty.load("/api/terminal/wasm");
         if (cancelled) return;

@@ -2,9 +2,11 @@ import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { NextResponse } from "next/server";
+import { buildTerminalFontFaces, type TerminalFontFace } from "@/lib/terminal-fonts";
 
 export const runtime = "nodejs";
 
+const WEB_TERMINAL_FONT_SIZE = 14;
 
 interface GhosttyTerminalConfig {
   fontFamilies: string[];
@@ -13,6 +15,7 @@ interface GhosttyTerminalConfig {
   wsUrl: string;
   controlUrl: string;
   shellsUrl: string;
+  fontFaces: TerminalFontFace[];
 }
 
 function stripQuotes(value: string): string {
@@ -60,11 +63,12 @@ function parseGhosttyConfig(filePath: string, urls: { wsUrl: string; controlUrl:
   if (fontFamilies.length === 0 && fontSize === null) return null;
   return {
     fontFamilies,
-    fontSize,
+    fontSize: WEB_TERMINAL_FONT_SIZE,
     configPath: filePath,
     wsUrl: urls.wsUrl,
     controlUrl: urls.controlUrl,
     shellsUrl: urls.shellsUrl,
+    fontFaces: buildTerminalFontFaces(fontFamilies),
   };
 }
 
@@ -91,10 +95,11 @@ export async function GET(req: Request) {
   const fontFamilies = ["MesloLGS NF", "D2CodingLigature Nerd Font Mono"];
   return NextResponse.json({
     fontFamilies,
-    fontSize: 16,
+    fontSize: WEB_TERMINAL_FONT_SIZE,
     configPath: null,
     wsUrl: urls.wsUrl,
     controlUrl: urls.controlUrl,
     shellsUrl: urls.shellsUrl,
+    fontFaces: buildTerminalFontFaces(fontFamilies),
   } satisfies GhosttyTerminalConfig);
 }
