@@ -37,6 +37,7 @@ interface WorktreeState {
 }
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
+const ALL_PROJECTS_LABEL = "All projects";
 
 function loadUnreadSessionIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -92,6 +93,33 @@ function getRecentProjects(sessions: SessionInfo[]): string[] {
   return [...latestByRoot.entries()]
     .sort((a, b) => b[1].localeCompare(a[1]))
     .map(([root]) => root);
+}
+
+interface ProjectSessionGroup {
+  projectRoot: string;
+  sessions: SessionInfo[];
+  tree: SessionTreeNode[];
+  latestModified: string;
+}
+
+function groupSessionsByProject(sessions: SessionInfo[]): ProjectSessionGroup[] {
+  const byProject = new Map<string, SessionInfo[]>();
+  for (const session of sessions) {
+    const root = session.projectRoot ?? session.cwd;
+    if (!root) continue;
+    const group = byProject.get(root);
+    if (group) group.push(session);
+    else byProject.set(root, [session]);
+  }
+
+  return [...byProject.entries()]
+    .map(([projectRoot, projectSessions]) => ({
+      projectRoot,
+      sessions: projectSessions,
+      tree: buildSessionTree(projectSessions),
+      latestModified: projectSessions.reduce((latest, session) => session.modified > latest ? session.modified : latest, ""),
+    }))
+    .sort((a, b) => b.latestModified.localeCompare(a.latestModified));
 }
 
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
@@ -315,6 +343,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
+  const [allProjectsMode, setAllProjectsMode] = useState(true);
   const [homeDir, setHomeDir] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
@@ -322,6 +351,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [customPathValue, setCustomPathValue] = useState("");
   const [customPathError, setCustomPathError] = useState<string | null>(null);
   const [customPathValidating, setCustomPathValidating] = useState(false);
+  const [newSessionPickMode, setNewSessionPickMode] = useState(false);
   const customPathInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Worktree switcher state
@@ -531,6 +561,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         restoredRef.current = true;
         const target = allSessions.find((s) => s.id === initialSessionId);
         if (target) {
+          setAllProjectsMode(false);
           setSelectedCwd(target.cwd);
           onSelectSession(target, true);
           return;
@@ -542,6 +573,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (projects.length > 0) setSelectedCwd(projects[0]);
     }
   }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
+
+  const startNewSessionInCwd = useCallback((cwd: string) => {
+    // Generate a temporary UUID client-side — no backend call needed.
+    // Pi will be spawned lazily when the user sends the first message.
+    const tempId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    setAllProjectsMode(false);
+    setSelectedCwd(cwd);
+    setNewSessionPickMode(false);
+    setDropdownOpen(false);
+    setProjectFilter("");
+    setCustomPathOpen(false);
+    setCustomPathValue("");
+    setCustomPathError(null);
+    onNewSession?.(tempId, cwd);
+  }, [onNewSession]);
 
   const commitCustomPath = useCallback(async () => {
     const path = customPathValue.trim();
@@ -560,7 +608,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         setCustomPathError(data.error ?? `HTTP ${res.status}`);
         return;
       }
-      setSelectedCwd(data.cwd ?? path);
+      const normalized = data.cwd ?? path;
+      if (newSessionPickMode) {
+        startNewSessionInCwd(normalized);
+        return;
+      }
+      setAllProjectsMode(false);
+      setSelectedCwd(normalized);
       setCustomPathOpen(false);
       setCustomPathValue("");
       setDropdownOpen(false);
@@ -569,13 +623,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } finally {
       setCustomPathValidating(false);
     }
-  }, [customPathValue, customPathValidating]);
+  }, [customPathValue, customPathValidating, newSessionPickMode, startNewSessionInCwd]);
 
   const handleDefaultCwd = useCallback(async () => {
     try {
       const res = await fetch("/api/default-cwd", { method: "POST" });
       const data = await res.json() as { cwd?: string; error?: string };
       if (data.cwd) {
+        if (newSessionPickMode) {
+          startNewSessionInCwd(data.cwd);
+          return;
+        }
+        setAllProjectsMode(false);
         setSelectedCwd(data.cwd);
         setCustomPathOpen(false);
         setCustomPathValue("");
@@ -585,7 +644,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } catch {
       // ignore
     }
-  }, []);
+  }, [newSessionPickMode, startNewSessionInCwd]);
 
   const handleCreateWorktree = useCallback(async () => {
     const branch = wtNewBranch.trim();
@@ -658,6 +717,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
+        setNewSessionPickMode(false);
         setProjectFilter("");
         setCustomPathOpen(false);
         setCustomPathValue("");
@@ -685,14 +745,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [onSelectSession]);
 
   const handleNewSession = useCallback(() => {
-    if (!selectedCwd) return;
-    // Generate a temporary UUID client-side — no backend call needed.
-    // Pi will be spawned lazily when the user sends the first message.
-    const tempId = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    onNewSession?.(tempId, selectedCwd);
-  }, [selectedCwd, onNewSession]);
+    setNewSessionPickMode(true);
+    setDropdownOpen(true);
+    setCustomPathOpen(false);
+    setCustomPathValue("");
+    setCustomPathError(null);
+  }, []);
 
   const recentProjects = getRecentProjects(allSessions);
   const showProjectFilter = recentProjects.length > 8;
@@ -700,11 +758,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
     : recentProjects;
 
-  // Sessions of every worktree in the selected project are shown together
+  // Sessions of every worktree in the selected project are shown together.
+  // In All Projects mode the sidebar keeps every project visible at once.
   const selectedProject = projectRootFor(selectedCwd);
-  const filteredSessions = selectedProject
-    ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
-    : allSessions;
+  const filteredSessions = allProjectsMode || !selectedProject
+    ? allSessions
+    : allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject);
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -736,6 +795,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // Build parent-child tree within the filtered set
   const sessionTree = buildSessionTree(filteredSessions);
+  const groupedSessionTrees = allProjectsMode ? groupSessionsByProject(filteredSessions) : [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -752,13 +812,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <div style={{ display: "flex", gap: 6 }}>
             <button
               onClick={handleNewSession}
-              disabled={!selectedCwd}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                background: "var(--bg-hover)",
-                border: "1px solid var(--border)",
-                color: selectedCwd ? "var(--text-muted)" : "var(--text-dim)",
-                cursor: selectedCwd ? "pointer" : "not-allowed",
+                background: newSessionPickMode ? "var(--bg-selected)" : "var(--bg-hover)",
+                border: `1px solid ${newSessionPickMode ? "rgba(37,99,235,0.35)" : "var(--border)"}`,
+                color: newSessionPickMode ? "var(--accent)" : "var(--text-muted)",
+                cursor: "pointer",
                 height: 32,
                 paddingLeft: 10,
                 paddingRight: 12,
@@ -769,17 +828,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 flexShrink: 0,
                 transition: "background 0.12s, color 0.12s, border-color 0.12s",
               }}
-              title={selectedCwd ? `New session in ${selectedCwd}` : "Select a project first"}
+              title="Choose a directory for a new session"
               onMouseEnter={(e) => {
-                if (!selectedCwd) return;
                 e.currentTarget.style.background = "var(--bg-selected)";
                 e.currentTarget.style.color = "var(--accent)";
                 e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = selectedCwd ? "var(--text-muted)" : "var(--text-dim)";
-                e.currentTarget.style.borderColor = "var(--border)";
+                e.currentTarget.style.background = newSessionPickMode ? "var(--bg-selected)" : "var(--bg-hover)";
+                e.currentTarget.style.color = newSessionPickMode ? "var(--accent)" : "var(--text-muted)";
+                e.currentTarget.style.borderColor = newSessionPickMode ? "rgba(37,99,235,0.35)" : "var(--border)";
               }}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
@@ -833,7 +891,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         {/* CWD picker */}
         <div ref={dropdownRef} style={{ position: "relative" }}>
           <button
-            onClick={() => setDropdownOpen((v) => !v)}
+            onClick={() => {
+              setNewSessionPickMode(false);
+              setDropdownOpen((v) => !v);
+            }}
             title={selectedProject ?? selectedCwd ?? ""}
             style={{
               width: "100%",
@@ -850,7 +911,21 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               transition: "border-color 0.15s, background 0.15s",
             }}
           >
-            {selectedCwd ? (
+            {allProjectsMode ? (
+              <span
+                style={{
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  color: "var(--text)",
+                }}
+              >
+                {ALL_PROJECTS_LABEL}
+              </span>
+            ) : selectedCwd ? (
               <PathLabel
                 text={displayCwd(selectedProject ?? selectedCwd, homeDir)}
                 style={{
@@ -892,6 +967,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               overflow: "hidden",
             }}
           >
+              {newSessionPickMode && (
+                <div style={{ padding: "7px 10px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>
+                  Choose directory for new session
+                </div>
+              )}
               {showProjectFilter && (
                 <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
                   <input
@@ -921,10 +1001,52 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </div>
               )}
               <div style={{ maxHeight: "min(50vh, 380px)", overflowY: "auto" }}>
+                {!newSessionPickMode && (
+                  <button
+                    onClick={() => {
+                      setAllProjectsMode(true);
+                      setProjectFilter("");
+                      setCustomPathOpen(false);
+                      setCustomPathValue("");
+                      setCustomPathError(null);
+                      setDropdownOpen(false);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      width: "100%",
+                      padding: "8px 10px",
+                      background: allProjectsMode ? "var(--bg-hover)" : "var(--bg)",
+                      border: "none",
+                      borderBottom: "1px solid var(--border)",
+                      color: allProjectsMode ? "var(--text)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                    title="Show sessions from every project"
+                  >
+                    {allProjectsMode ? (
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                      </svg>
+                    ) : (
+                      <span style={{ width: 10, flexShrink: 0 }} />
+                    )}
+                    <span style={{ flex: 1 }}>{ALL_PROJECTS_LABEL}</span>
+                  </button>
+                )}
                 {visibleProjects.map((project) => (
                   <button
                     key={project}
                     onClick={() => {
+                      if (newSessionPickMode) {
+                        startNewSessionInCwd(project);
+                        return;
+                      }
+                      setAllProjectsMode(false);
                       setSelectedCwd(project);
                       setProjectFilter("");
                       setCustomPathOpen(false);
@@ -941,7 +1063,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       background: "var(--bg)",
                       border: "none",
                       borderBottom: "1px solid var(--border)",
-                      color: project === selectedProject ? "var(--text)" : "var(--text-muted)",
+                      color: !allProjectsMode && project === selectedProject ? "var(--text)" : "var(--text-muted)",
                       cursor: "pointer",
                       textAlign: "left",
                       fontSize: 11,
@@ -952,12 +1074,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     }}
                     title={project}
                   >
-                    {project === selectedProject && (
+                    {!allProjectsMode && project === selectedProject && (
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                         <polyline points="1.5 5 4 7.5 8.5 2.5" />
                       </svg>
                     )}
-                    {project !== selectedProject && <span style={{ width: 10, flexShrink: 0 }} />}
+                    {(allProjectsMode || project !== selectedProject) && <span style={{ width: 10, flexShrink: 0 }} />}
                     <PathLabel text={displayCwd(project, homeDir)} style={{ flex: 1 }} />
                   </button>
                 ))}
@@ -1083,7 +1205,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         opacity: customPathValidating || !customPathValue.trim() ? 0.65 : 1,
                       }}
                     >
-                      {customPathValidating ? "Checking…" : "Open"}
+                      {customPathValidating ? "Checking…" : newSessionPickMode ? "Start" : "Open"}
                     </button>
                     <button
                       onClick={() => { setCustomPathOpen(false); setCustomPathValue(""); setCustomPathError(null); }}
@@ -1441,7 +1563,55 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             No sessions found
           </div>
         )}
-        {sessionTree.map((node) => (
+        {allProjectsMode ? groupedSessionTrees.map((group) => (
+          <div key={group.projectRoot}>
+            <button
+              type="button"
+              onClick={() => {
+                setAllProjectsMode(false);
+                setSelectedCwd(group.projectRoot);
+              }}
+              title={`Focus ${group.projectRoot}`}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "7px 10px 6px",
+                background: "var(--bg)",
+                border: "none",
+                borderTop: "1px solid var(--border)",
+                borderBottom: "1px solid var(--border)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                textAlign: "left",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              <PathLabel text={displayCwd(group.projectRoot, homeDir)} style={{ flex: 1, fontWeight: 700, color: "var(--text)" }} />
+              <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
+                {group.sessions.length}
+              </span>
+            </button>
+            {group.tree.map((node) => (
+              <SessionTreeItem
+                key={node.session.id}
+                node={node}
+                selectedSessionId={selectedSessionId}
+                runningSessionIds={runningSessionIds}
+                unreadSessionIds={unreadSessionIds}
+                onSelectSession={handleSelectSessionFromList}
+                onRenamed={loadSessions}
+                onSessionDeleted={(id) => {
+                  onSessionDeleted?.(id);
+                  loadSessions();
+                }}
+                depth={0}
+              />
+            ))}
+          </div>
+        )) : sessionTree.map((node) => (
           <SessionTreeItem
             key={node.session.id}
             node={node}

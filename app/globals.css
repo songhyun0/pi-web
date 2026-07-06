@@ -71,6 +71,17 @@ html.dark {
   box-sizing: border-box;
 }
 
+/* Prevent iOS Safari double-tap zoom when rapidly tapping controls. */
+button,
+[type="button"],
+[type="submit"],
+[type="reset"],
+a,
+[role="button"],
+summary {
+  touch-action: manipulation;
+}
+
 html, body {
   height: 100%;
   margin: 0;
@@ -80,6 +91,20 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
   overscroll-behavior: none;
+  /* Allow scrolling, but prevent pinch/double-tap zoom where supported. */
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+}
+
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 640px) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    textarea,
+    select {
+      /* iOS Safari auto-zooms focused fields below 16px. */
+      font-size: 16px !important;
+    }
+  }
 }
 
 body {
