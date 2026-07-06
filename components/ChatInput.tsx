@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
-import { WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
+import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -400,7 +400,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
     const seen = new Set<string>();
-    const commands = [...(isStreaming ? [] : WEB_BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])]
+    const commands = [...(isStreaming ? [] : IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])]
       .filter((command) => {
         const key = `${command.source}:${command.name}`;
         if (seen.has(key)) return false;

@@ -60,6 +60,10 @@ export const WEB_BUILTIN_SLASH_COMMANDS: WebBuiltinSlashCommand[] = [
   { name: "quit", description: "Quit pi", source: "builtin", mode: "unsupported" },
 ];
 
+export const IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS = WEB_BUILTIN_SLASH_COMMANDS.filter(
+  (command) => command.mode !== "unsupported"
+);
+
 const WEB_BUILTIN_SLASH_COMMANDS_BY_NAME = new Map(
   WEB_BUILTIN_SLASH_COMMANDS.map((command) => [command.name, command])
 );

@@ -1,6 +1,6 @@
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { WEB_BUILTIN_SLASH_COMMANDS, type SlashCommandInfo } from "./slash-command-registry";
+import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS, getWebBuiltinSlashCommand, type SlashCommandInfo } from "./slash-command-registry";
 
 type PiCodingAgentModule = {
   getPackageDir?: () => string;
@@ -13,7 +13,7 @@ type PiSlashCommandsModule = {
 let cached: Promise<SlashCommandInfo[]> | null = null;
 
 function fallbackBuiltinCommands(): SlashCommandInfo[] {
-  return WEB_BUILTIN_SLASH_COMMANDS.map(({ name, description }) => ({
+  return IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS.map(({ name, description }) => ({
     name,
     description,
     source: "builtin",
@@ -38,7 +38,10 @@ export function loadPiBuiltinSlashCommands(): Promise<SlashCommandInfo[]> {
           description: typeof command.description === "string" ? command.description : undefined,
           source: "builtin" as const,
         }))
-        .filter((command) => command.name.length > 0);
+        .filter((command) => {
+          const webCommand = getWebBuiltinSlashCommand(command.name);
+          return Boolean(webCommand && webCommand.mode !== "unsupported");
+        });
 
       return normalized.length > 0 ? normalized : fallbackBuiltinCommands();
     } catch {
