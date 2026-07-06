@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
+import { WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -95,20 +96,9 @@ function formatTokenCount(tokens: number): string {
   return tokens.toLocaleString();
 }
 
-type SlashCommandPaletteItem = SlashCommandInfo | {
-  name: string;
-  description: string;
-  source: "builtin";
-};
+type SlashCommandPaletteItem = SlashCommandInfo;
 
 type SlashCommandSource = SlashCommandPaletteItem["source"];
-
-const BUILTIN_SLASH_COMMANDS: SlashCommandPaletteItem[] = [
-  { name: "compact", description: "Compress context, optionally with instructions", source: "builtin" },
-  { name: "name", description: "Set the session display name", source: "builtin" },
-  { name: "session", description: "Show session message, token, and cost stats", source: "builtin" },
-  { name: "copy", description: "Copy the last assistant message", source: "builtin" },
-];
 
 const SLASH_SOURCES: SlashCommandSource[] = ["builtin", "extension", "prompt", "skill"];
 
@@ -409,7 +399,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
-    const commands = [...(isStreaming ? [] : BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])];
+    const seen = new Set<string>();
+    const commands = [...(isStreaming ? [] : WEB_BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])]
+      .filter((command) => {
+        const key = `${command.source}:${command.name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     return [...commands]
       .filter((command) => {
         const name = command.name.toLowerCase();
@@ -1046,7 +1043,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <div style={{ maxHeight: "calc(min(56vh, 460px) - 34px)", overflowY: "auto", padding: 10 }}>
                 {!slashCommandsLoading && filteredSlashCommands.length === 0 ? (
                   <div style={{ padding: "2px 2px 4px", fontSize: 12, color: "var(--text-dim)" }}>
-                    No extension, prompt, or skill commands found
+                    No slash commands found
                   </div>
                 ) : (
                   groupedSlashCommands.map((group) => (

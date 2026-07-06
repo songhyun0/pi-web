@@ -1,7 +1,8 @@
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
 import { cacheSessionPath } from "./session-reader";
-import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import { loadPiBuiltinSlashCommands } from "./pi-builtin-slash-commands";
+import type { SlashCommandInfo } from "./slash-command-registry";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
 
@@ -419,7 +420,12 @@ export class AgentSessionWrapper {
 
       case "get_commands": {
         const commands: SlashCommandInfo[] = [];
+        const builtinCommands = await loadPiBuiltinSlashCommands();
+        const builtinNames = new Set(builtinCommands.map((command) => command.name));
+        commands.push(...builtinCommands);
+
         for (const registered of this.inner.extensionRunner.getRegisteredCommands()) {
+          if (builtinNames.has(registered.invocationName)) continue;
           commands.push({
             name: registered.invocationName,
             description: registered.description,

@@ -13,6 +13,7 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SlashCommandInfo } from "@/lib/slash-command-registry";
 
 export interface SessionData {
   sessionId: string;
@@ -120,18 +121,7 @@ export interface CompactResultInfo {
   estimatedTokensAfter: number;
 }
 
-export interface SlashCommandInfo {
-  name: string;
-  description?: string;
-  source: "extension" | "prompt" | "skill";
-  sourceInfo?: {
-    path: string;
-    source: string;
-    scope: "user" | "project" | "temporary";
-    origin: "package" | "top-level";
-    baseDir?: string;
-  };
-}
+export type { SlashCommandInfo };
 
 export type BuiltinSlashCommandResult =
   | { handled: false }
