@@ -1,4 +1,4 @@
-import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionFromServices, createAgentSessionServices, estimateTokens, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { cacheSessionPath } from "./session-reader";
@@ -227,6 +227,28 @@ export class AgentSessionWrapper {
     this.onDestroyCallback = cb;
   }
 
+  private getLiveContextUsage() {
+    const contextUsage = this.inner.getContextUsage();
+    if (!contextUsage || contextUsage.tokens === null || contextUsage.contextWindow <= 0) return contextUsage;
+    if (!this.inner.isStreaming) return contextUsage;
+
+    const streamingMessage = (this.inner.agent.state as { streamingMessage?: unknown } | undefined)?.streamingMessage;
+    if (!streamingMessage || typeof streamingMessage !== "object") return contextUsage;
+
+    try {
+      const streamingTokens = estimateTokens(streamingMessage as Parameters<typeof estimateTokens>[0]);
+      if (!Number.isFinite(streamingTokens) || streamingTokens <= 0) return contextUsage;
+      const tokens = contextUsage.tokens + streamingTokens;
+      return {
+        ...contextUsage,
+        tokens,
+        percent: (tokens / contextUsage.contextWindow) * 100,
+      };
+    } catch {
+      return contextUsage;
+    }
+  }
+
   async send(command: Record<string, unknown>): Promise<unknown> {
     this.resetIdleTimer();
     const type = command.type as string;
@@ -265,7 +287,7 @@ export class AgentSessionWrapper {
 
       case "get_state": {
         const model = this.inner.model;
-        const contextUsage = this.inner.getContextUsage();
+        const contextUsage = this.getLiveContextUsage();
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",

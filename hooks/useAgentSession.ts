@@ -93,6 +93,14 @@ type AgentStateResponse = {
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
 };
 
+type ContextUsageInfo = NonNullable<AgentStateResponse["contextUsage"]>;
+
+function sameContextUsage(a: ContextUsageInfo | null, b: ContextUsageInfo | null): boolean {
+  return a?.percent === b?.percent
+    && a?.contextWindow === b?.contextWindow
+    && a?.tokens === b?.tokens;
+}
+
 export interface QueuedMessages {
   steering: string[];
   followUp: string[];
@@ -164,6 +172,7 @@ const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
 const AGENT_STATE_RECONCILE_MS = 15_000;
+const LIVE_CONTEXT_USAGE_REFRESH_THROTTLE_MS = 2_000;
 const EVENT_STREAM_CONNECT_TIMEOUT_MS = 5_000;
 const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
@@ -458,7 +467,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(() => readStoredToolPreset());
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(() => readStoredThinkingLevel());
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
-  const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
+  const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
@@ -493,11 +502,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const liveContextUsageRefreshInFlightRef = useRef(false);
+  const lastLiveContextUsageRefreshAtRef = useRef(0);
+  const pendingLiveContextUsageRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+
+  const applyContextUsage = useCallback((usage: AgentStateResponse["contextUsage"]) => {
+    const nextUsage = usage ?? null;
+    setContextUsage((prev) => sameContextUsage(prev, nextUsage) ? prev : nextUsage);
+  }, []);
+
+  const applyContextUsageFromState = useCallback((state?: AgentStateResponse | null) => {
+    if (state?.contextUsage !== undefined) applyContextUsage(state.contextUsage);
+  }, [applyContextUsage]);
 
   const sessionStats = (() => {
     if (sessionStatsOverride) return sessionStatsOverride;
@@ -564,7 +585,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(null);
       const liveState = d.agentState?.state;
       if (liveState) {
-        if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
+        applyContextUsageFromState(liveState);
         if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
         if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
         if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
@@ -583,7 +604,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, []);
+  }, [applyContextUsageFromState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -887,6 +908,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (res.ok) {
           const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
           const state = data.state;
+          applyContextUsageFromState(state);
           if (!data.running || !state || (!state.isStreaming && !state.isPromptRunning)) {
             await finishPromptWithoutStream(sid, runId);
             return;
@@ -897,7 +919,57 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       await delay(PROMPT_SETTLE_POLL_MS);
     }
-  }, [finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, finishPromptWithoutStream]);
+
+  const fetchLiveContextUsage = useCallback(async (runId: number) => {
+    const sid = sessionIdRef.current;
+    if (!sid || !agentRunningRef.current || promptRunIdRef.current !== runId) return;
+    if (liveContextUsageRefreshInFlightRef.current) return;
+    liveContextUsageRefreshInFlightRef.current = true;
+    lastLiveContextUsageRefreshAtRef.current = Date.now();
+    try {
+      const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
+      const data = await res.json() as { state?: AgentStateResponse };
+      if (promptRunIdRef.current !== runId || !agentRunningRef.current) return;
+      applyContextUsageFromState(data.state);
+    } catch {
+      // Best-effort live refresh; final/reconcile paths remain authoritative.
+    } finally {
+      liveContextUsageRefreshInFlightRef.current = false;
+    }
+  }, [applyContextUsageFromState]);
+
+  const requestLiveContextUsageRefresh = useCallback((options: { immediate?: boolean } = {}) => {
+    if (!agentRunningRef.current) return;
+    const runId = promptRunIdRef.current;
+
+    const schedule = (delay: number) => {
+      if (pendingLiveContextUsageRefreshTimerRef.current) return;
+      pendingLiveContextUsageRefreshTimerRef.current = setTimeout(() => {
+        pendingLiveContextUsageRefreshTimerRef.current = null;
+        void fetchLiveContextUsage(runId);
+      }, delay);
+    };
+
+    if (liveContextUsageRefreshInFlightRef.current) {
+      schedule(LIVE_CONTEXT_USAGE_REFRESH_THROTTLE_MS);
+      return;
+    }
+
+    const elapsed = Date.now() - lastLiveContextUsageRefreshAtRef.current;
+    const delay = options.immediate ? 0 : Math.max(0, LIVE_CONTEXT_USAGE_REFRESH_THROTTLE_MS - elapsed);
+    if (delay > 0) {
+      schedule(delay);
+      return;
+    }
+
+    if (pendingLiveContextUsageRefreshTimerRef.current) {
+      clearTimeout(pendingLiveContextUsageRefreshTimerRef.current);
+      pendingLiveContextUsageRefreshTimerRef.current = null;
+    }
+    void fetchLiveContextUsage(runId);
+  }, [fetchLiveContextUsage]);
 
   // Reconcile client streaming state with the server. When SSE events are
   // missed (network drop, mobile tab backgrounded, half-open connection),
@@ -924,11 +996,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // (wrapper destroyed) means nothing is compacting.
       setIsCompacting(state?.isCompacting ?? false);
       setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
+      if (state) applyContextUsageFromState(state);
       const busy = data.running && state
         && (state.isStreaming || state.isPromptRunning || state.isCompacting);
       if (busy || !agentRunningRef.current) return;
       if (state) {
-        if (state.contextUsage !== undefined) setContextUsage(state.contextUsage ?? null);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
         if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
         if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
@@ -937,7 +1009,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
-  }, [finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, finishPromptWithoutStream]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -974,6 +1046,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentRunning(true);
         setAgentPhase({ kind: "waiting_model" });
         dispatch({ type: "start" });
+        requestLiveContextUsageRefresh({ immediate: true });
         break;
       case "agent_end":
         // A late agent_end can arrive over SSE after reconcileAgentState
@@ -990,7 +1063,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           fetch(`/api/agent/${encodeURIComponent(sessionIdRef.current)}`)
             .then((r) => r.json())
             .then((d: { state?: AgentStateResponse }) => {
-              if (d.state?.contextUsage !== undefined) setContextUsage(d.state.contextUsage ?? null);
+              applyContextUsageFromState(d.state);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
@@ -1028,6 +1101,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (msg) {
           dispatch({ type: "update", message: normalizeToolCalls(msg as AgentMessage) });
         }
+        if (event.type === "message_update") {
+          requestLiveContextUsageRefresh();
+        } else {
+          requestLiveContextUsageRefresh({ immediate: true });
+        }
         setAgentPhase(null);
         break;
       }
@@ -1060,6 +1138,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         dispatch({ type: "reset" });
         setAgentPhase({ kind: "waiting_model" });
+        requestLiveContextUsageRefresh({ immediate: true });
         break;
       }
       case "tool_execution_start": {
@@ -1070,6 +1149,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!tools.some((t) => t.id === id)) tools.push({ id, name });
           return { kind: "running_tools", tools };
         });
+        requestLiveContextUsageRefresh({ immediate: true });
         break;
       }
       case "tool_execution_end": {
@@ -1080,6 +1160,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (tools.length === 0) return { kind: "waiting_model" };
           return { kind: "running_tools", tools };
         });
+        requestLiveContextUsageRefresh({ immediate: true });
         break;
       }
       case "queue_update":
@@ -1115,7 +1196,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, applyContextUsageFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1688,7 +1769,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
-          if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
+          applyContextUsageFromState(agentState.state);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
@@ -1700,6 +1781,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => {
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
+      if (pendingLiveContextUsageRefreshTimerRef.current) {
+        clearTimeout(pendingLiveContextUsageRefreshTimerRef.current);
+        pendingLiveContextUsageRefreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
