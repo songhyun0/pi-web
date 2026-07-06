@@ -194,10 +194,7 @@ pre, code {
   list-style: none;
 }
 .markdown-body .task-list-item {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 7px;
-  align-items: start;
+  display: block;
   padding-left: 0;
 }
 .markdown-body .task-list-item::marker { content: ""; }
@@ -205,11 +202,12 @@ pre, code {
   appearance: none;
   width: 14px;
   height: 14px;
-  margin: 5px 0 0;
+  margin: 0 7px 0 0;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   display: inline-grid;
+  vertical-align: -2px;
   place-content: center;
 }
 .markdown-body .task-list-item input[type="checkbox"]:checked {
