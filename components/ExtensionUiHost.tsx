@@ -291,13 +291,15 @@ function ExtensionDialog({
   );
 }
 
-function toTerminalKeyData(e: KeyboardEvent): string | null {
+function toTerminalKeyData(e: KeyboardEvent, options?: { includePrintable?: boolean }): string | null {
   if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
     const ch = e.key.toLowerCase();
     if (ch >= "a" && ch <= "z") {
       return String.fromCharCode(ch.charCodeAt(0) - 96);
     }
   }
+
+  const includePrintable = options?.includePrintable ?? true;
 
   switch (e.key) {
     case "ArrowUp":
@@ -314,12 +316,22 @@ function toTerminalKeyData(e: KeyboardEvent): string | null {
       return "\x1b";
     case "Backspace":
       return "\x7f";
+    case "Delete":
+      return "\x1b[3~";
+    case "Home":
+      return "\x1b[H";
+    case "End":
+      return "\x1b[F";
+    case "PageUp":
+      return "\x1b[5~";
+    case "PageDown":
+      return "\x1b[6~";
     case "Tab":
       return "\t";
     case " ":
-      return " ";
+      return includePrintable ? " " : null;
     default:
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) return e.key;
+      if (includePrintable && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) return e.key;
       return null;
   }
 }
@@ -552,12 +564,24 @@ function ExtensionCustomPanel({
   onResize: (request: ExtensionCustomRequest, size: { columns: number; rows: number }) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
   const lastSizeRef = useRef<string>("");
   const displayLines = normalizeCustomPanelLines(request.lines);
 
+  const focusInput = () => {
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const sendTextInput = (text: string) => {
+    if (!text) return;
+    onInput(request, text);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
   useEffect(() => {
     lastSizeRef.current = "";
-    panelRef.current?.focus();
+    focusInput();
   }, [request.id]);
 
   useEffect(() => {
@@ -595,13 +619,7 @@ function ExtensionCustomPanel({
         tabIndex={0}
         role="dialog"
         aria-modal="true"
-        onKeyDown={(e) => {
-          const data = toTerminalKeyData(e);
-          if (!data) return;
-          e.preventDefault();
-          e.stopPropagation();
-          onInput(request, data);
-        }}
+        onMouseDown={() => focusInput()}
         style={{
           width: "min(920px, 100%)",
           maxHeight: "min(760px, calc(100vh - 40px))",
@@ -613,6 +631,59 @@ function ExtensionCustomPanel({
           outline: "none",
         }}
       >
+        <textarea
+          ref={inputRef}
+          aria-label="Extension terminal input"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || composingRef.current) return;
+            const data = toTerminalKeyData(e, { includePrintable: false });
+            if (!data) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onInput(request, data);
+            if (inputRef.current) inputRef.current.value = "";
+          }}
+          onBeforeInput={(e) => {
+            const native = e.nativeEvent as InputEvent;
+            if (native.isComposing || composingRef.current) return;
+            if (native.inputType === "insertText" && native.data) {
+              e.preventDefault();
+              sendTextInput(native.data);
+            }
+          }}
+          onInput={(e) => {
+            if (composingRef.current) return;
+            sendTextInput(e.currentTarget.value);
+          }}
+          onPaste={(e) => {
+            const text = e.clipboardData.getData("text");
+            if (!text) return;
+            e.preventDefault();
+            sendTextInput(text);
+          }}
+          onCompositionStart={() => {
+            composingRef.current = true;
+          }}
+          onCompositionEnd={(e) => {
+            composingRef.current = false;
+            sendTextInput(e.data || e.currentTarget.value);
+          }}
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            opacity: 0,
+            resize: "none",
+            border: 0,
+            padding: 0,
+            margin: 0,
+            outline: "none",
+            pointerEvents: "none",
+          }}
+        />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>Extension panel</div>
           <button
