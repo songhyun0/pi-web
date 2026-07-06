@@ -5,7 +5,9 @@ import type { AgentMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode } f
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
+import type { SlashUiAction } from "@/lib/slash-command-registry";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -23,6 +25,7 @@ interface Props {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
   onSessionStatsPanelOpen?: () => void;
+  onSlashUiAction?: (action: SlashUiAction) => void | Promise<void>;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
 }
 
@@ -43,7 +46,7 @@ const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
 const CHAT_INPUT_RIGHT_PADDING = CHAT_COLUMN_PADDING + CHAT_MINIMAP_WIDTH;
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onSlashUiAction, onContextUsageChange }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -62,7 +65,29 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     onAgentEnd?.();
   }, [onAgentEnd]);
 
+  const [treeSelectorOpen, setTreeSelectorOpen] = useState(false);
+  const [forkSelectorOpen, setForkSelectorOpen] = useState(false);
+  const [fullTreeState, setFullTreeState] = useState<{
+    sessionId: string | null;
+    tree: SessionTreeNode[];
+    leafId: string | null;
+    loading: boolean;
+    error: string | null;
+  }>({ sessionId: null, tree: [], leafId: null, loading: false, error: null });
+  const handleSlashUiAction = useCallback(async (action: SlashUiAction) => {
+    if (action.type === "openBranchNavigator") {
+      setTreeSelectorOpen(true);
+      return;
+    }
+    if (action.type === "openForkSelector") {
+      setForkSelectorOpen(true);
+      return;
+    }
+    await onSlashUiAction?.(action);
+  }, [onSlashUiAction]);
+
   const {
+    data, activeLeafId,
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
@@ -78,10 +103,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands,
+    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
-    modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
+    modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen, onSlashUiAction: handleSlashUiAction,
   });
 
   // Push session stats up to AppShell for the top bar.
@@ -141,6 +166,46 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const currentThinkingLevelMap = displayModelValue
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
+
+  useEffect(() => {
+    if (!treeSelectorOpen) return;
+    const sid = data?.sessionId ?? session?.id ?? null;
+    if (!sid) {
+      setFullTreeState({ sessionId: null, tree: [], leafId: null, loading: false, error: "No active session" });
+      return;
+    }
+
+    const fallbackTree = data?.tree ?? [];
+    const fallbackLeafId = activeLeafId;
+    const controller = new AbortController();
+    setFullTreeState({ sessionId: sid, tree: fallbackTree, leafId: fallbackLeafId, loading: true, error: null });
+    fetch(`/api/sessions/${encodeURIComponent(sid)}/tree`, { signal: controller.signal })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({})) as { tree?: SessionTreeNode[]; leafId?: string | null; error?: string };
+        if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+        return body;
+      })
+      .then((body) => {
+        setFullTreeState({
+          sessionId: sid,
+          tree: body.tree ?? [],
+          leafId: body.leafId ?? null,
+          loading: false,
+          error: null,
+        });
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setFullTreeState({
+          sessionId: sid,
+          tree: fallbackTree,
+          leafId: fallbackLeafId,
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    return () => controller.abort();
+  }, [activeLeafId, data?.sessionId, data?.tree, session?.id, treeSelectorOpen]);
 
   const chatInputElement = (
     <ChatInput
@@ -252,6 +317,28 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         <ExtensionCustomPanel
           request={extensionCustomUi}
           onInput={sendExtensionCustomInput}
+        />
+      )}
+
+      {treeSelectorOpen && (
+        <SessionTreeSelectorModal
+          tree={fullTreeState.tree}
+          activeLeafId={fullTreeState.leafId ?? activeLeafId}
+          loading={fullTreeState.loading}
+          error={fullTreeState.error}
+          onClose={() => setTreeSelectorOpen(false)}
+          onSelect={handleNavigate}
+        />
+      )}
+
+      {forkSelectorOpen && (
+        <ForkSelectorModal
+          onClose={() => setForkSelectorOpen(false)}
+          onLoadCandidates={loadForkCandidates}
+          onFork={handleFork}
+          busyEntryId={forkingEntryId}
+          disabled={agentRunning || isNew}
+          disabledReason={isNew ? "Fork is available after the session has messages." : "Fork is available after the current run finishes."}
         />
       )}
 

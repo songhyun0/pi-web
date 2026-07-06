@@ -144,6 +144,9 @@ export interface AgentSessionLike {
   setSessionName(name: string): void;
   getSessionStats(): Omit<SessionStatsInfo, "sessionName">;
   getLastAssistantText(): string | undefined;
+  getUserMessagesForForking(): Array<{ entryId: string; text: string }>;
+  exportToHtml(outputPath?: string): Promise<string>;
+  exportToJsonl(outputPath?: string): string;
   setAutoCompactionEnabled(enabled: boolean): void;
   setAutoRetryEnabled(enabled: boolean): void;
   steer(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void>;

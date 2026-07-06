@@ -1,5 +1,6 @@
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
+import { existsSync } from "fs";
 import { cacheSessionPath } from "./session-reader";
 import { loadPiBuiltinSlashCommands } from "./pi-builtin-slash-commands";
 import type { SlashCommandInfo } from "./slash-command-registry";
@@ -67,6 +68,20 @@ function withExtensionTools(session: AgentSessionLike, toolNames: string[]): str
     .filter((name) => !codingToolNames.has(name));
 
   return [...new Set([...toolNames, ...extensionToolNames])];
+}
+
+function extractUserMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) =>
+      block && typeof block === "object"
+        && (block as { type?: unknown }).type === "text"
+        && typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text
+        : "")
+    .filter(Boolean)
+    .join("\n");
 }
 
 // ============================================================================
@@ -320,31 +335,74 @@ export class AgentSessionWrapper {
 
         const entry = sessionManager.getEntry(entryId);
         if (!entry) throw new Error("Invalid entry ID for forking");
+        const selectedText = entry.type === "message"
+          && "message" in entry
+          && (entry.message as { role?: unknown }).role === "user"
+          ? extractUserMessageText((entry.message as { content?: unknown }).content)
+          : undefined;
 
         const sessionDir = sessionManager.getSessionDir();
         let newSessionFile: string;
+        let newSessionId: string;
 
         if (!entry.parentId) {
-          // Fork before the first message: create an empty session linked to this one
+          // Fork before the first message: create an empty session linked to this one.
+          // SessionManager defers writing until an assistant message, but pi-web must
+          // make the new session selectable immediately.
           const newManager = SessionManager.create(sessionManager.getCwd(), sessionDir);
           newManager.newSession({ parentSession: currentSessionFile });
           newSessionFile = newManager.getSessionFile() as string;
+          if (!existsSync(newSessionFile)) {
+            (newManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+          }
+          if (!existsSync(newSessionFile)) throw new Error("Failed to write forked session");
+          newSessionId = newManager.getSessionId();
         } else {
           // Fork after some history: copy path up to (but not including) the fork point
           const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
           const forkedPath = sourceManager.createBranchedSession(entry.parentId);
           if (!forkedPath) throw new Error("Failed to create forked session");
           newSessionFile = forkedPath;
+          if (!existsSync(newSessionFile)) {
+            (sourceManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+          }
+          if (!existsSync(newSessionFile)) throw new Error("Failed to write forked session");
+          newSessionId = sourceManager.getSessionId();
         }
 
-        const newSessionId = SessionManager.open(newSessionFile, sessionDir).getSessionId();
         cacheSessionPath(newSessionId, newSessionFile);
         this.destroy();
+        return { cancelled: false, newSessionId, selectedText };
+      }
+
+      case "clone": {
+        const sessionManager = this.inner.sessionManager;
+        const currentSessionFile = this.inner.sessionFile;
+        const leafId = sessionManager.getLeafId?.();
+
+        if (!leafId) return { cancelled: true };
+        if (!sessionManager.isPersisted()) return { cancelled: true };
+        if (!currentSessionFile) throw new Error("Persisted session is missing a session file");
+
+        const sourceManager = SessionManager.open(currentSessionFile, sessionManager.getSessionDir());
+        const newSessionFile = sourceManager.createBranchedSession(leafId);
+        if (!newSessionFile) throw new Error("Failed to clone session");
+
+        // createBranchedSession intentionally defers writing paths with no assistant
+        // message. A web clone must be immediately openable from the sidebar, so force
+        // a rewrite for that edge case.
+        if (!existsSync(newSessionFile)) {
+          (sourceManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+        }
+        if (!existsSync(newSessionFile)) throw new Error("Failed to write cloned session");
+
+        const newSessionId = sourceManager.getSessionId();
+        cacheSessionPath(newSessionId, newSessionFile);
         return { cancelled: false, newSessionId };
       }
 
       case "navigate_tree": {
-        const result = await this.inner.navigateTree(command.targetId as string, {});
+        const result = await this.inner.navigateTree(command.targetId as string, { summarize: command.summarize === true });
         return { cancelled: result.cancelled };
       }
 
@@ -383,6 +441,18 @@ export class AgentSessionWrapper {
 
       case "get_last_assistant_text": {
         return { text: this.inner.getLastAssistantText() ?? "" };
+      }
+
+      case "get_user_messages_for_forking": {
+        return { messages: this.inner.getUserMessagesForForking() };
+      }
+
+      case "export_session": {
+        const outputPath = (command.outputPath as string | undefined)?.trim() || undefined;
+        if (outputPath?.endsWith(".jsonl")) {
+          return { filePath: this.inner.exportToJsonl(outputPath), format: "jsonl" };
+        }
+        return { filePath: await this.inner.exportToHtml(outputPath), format: "html" };
       }
 
       case "set_auto_compaction": {

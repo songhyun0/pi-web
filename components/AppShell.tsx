@@ -15,6 +15,7 @@ import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
+import type { SlashUiAction } from "@/lib/slash-command-registry";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -466,6 +467,32 @@ export function AppShell() {
     if (!selectedSession) return;
     window.location.href = `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
   }, [selectedSession]);
+
+  const handleSlashUiAction = useCallback((action: SlashUiAction) => {
+    switch (action.type) {
+      case "openSessionStats":
+        openSessionStatsPanel();
+        break;
+      case "openBranchNavigator":
+        if (isMobile) setSidebarOpen(false);
+        setActiveTopPanel("branches");
+        break;
+      case "openForkSelector":
+        break;
+      case "openModelsConfig":
+        setModelsConfigOpen(true);
+        break;
+      case "newSession": {
+        const cwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
+        if (cwd) handleNewSession("", cwd);
+        break;
+      }
+      case "openSessionSidebar":
+        setActiveTopPanel(null);
+        setSidebarOpen(true);
+        break;
+    }
+  }, [activeCwd, handleNewSession, isMobile, newSessionCwd, openSessionStatsPanel, selectedSession?.cwd]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -1192,6 +1219,7 @@ export function AppShell() {
               onSystemPromptChange={handleSystemPromptChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
+              onSlashUiAction={handleSlashUiAction}
               onContextUsageChange={handleContextUsageChange}
             />
           ) : showPlaceholder ? (

@@ -13,7 +13,12 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
-import type { SlashCommandInfo } from "@/lib/slash-command-registry";
+import {
+  getWebBuiltinSlashCommand,
+  isWebBuiltinSlashCommand,
+  type SlashCommandInfo,
+  type SlashUiAction,
+} from "@/lib/slash-command-registry";
 
 export interface SessionData {
   sessionId: string;
@@ -65,6 +70,15 @@ interface CompactCommandResult {
 
 interface LastAssistantTextResponse {
   text?: string;
+}
+
+export interface ForkCandidate {
+  entryId: string;
+  text: string;
+}
+
+interface ForkCandidatesResponse {
+  messages?: ForkCandidate[];
 }
 
 type AgentStateResponse = {
@@ -125,7 +139,7 @@ export type { SlashCommandInfo };
 
 export type BuiltinSlashCommandResult =
   | { handled: false }
-  | { handled: true; message?: string; error?: string; action?: "openSessionStats" };
+  | { handled: true; message?: string; error?: string; action?: SlashUiAction["type"] | "download" };
 
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
@@ -138,6 +152,7 @@ export interface UseAgentSessionOptions {
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsPanelOpen?: () => void;
+  onSlashUiAction?: (action: SlashUiAction) => void | Promise<void>;
   setToolPreset?: (preset: "none" | "default" | "full") => void;
 }
 
@@ -291,10 +306,81 @@ type SlashCommandsResponse = {
   commands?: SlashCommandInfo[];
 };
 
+type ModelMatchResult =
+  | { status: "matched"; model: ModelEntry }
+  | { status: "ambiguous" }
+  | { status: "not-found" };
+
+function findExactModelMatch(searchTerm: string, models: ModelEntry[]): ModelMatchResult {
+  const trimmed = searchTerm.trim();
+  if (!trimmed) return { status: "not-found" };
+  const normalized = trimmed.toLowerCase();
+
+  const canonicalMatches = models.filter((model) => `${model.provider}/${model.id}`.toLowerCase() === normalized);
+  if (canonicalMatches.length === 1) return { status: "matched", model: canonicalMatches[0] };
+  if (canonicalMatches.length > 1) return { status: "ambiguous" };
+
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex !== -1) {
+    const provider = trimmed.slice(0, slashIndex).trim().toLowerCase();
+    const modelId = trimmed.slice(slashIndex + 1).trim().toLowerCase();
+    if (provider && modelId) {
+      const providerMatches = models.filter((model) =>
+        model.provider.toLowerCase() === provider && model.id.toLowerCase() === modelId
+      );
+      if (providerMatches.length === 1) return { status: "matched", model: providerMatches[0] };
+      if (providerMatches.length > 1) return { status: "ambiguous" };
+    }
+  }
+
+  const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
+  if (idMatches.length === 1) return { status: "matched", model: idMatches[0] };
+  if (idMatches.length > 1) return { status: "ambiguous" };
+
+  const nameMatches = models.filter((model) => model.name.toLowerCase() === normalized);
+  if (nameMatches.length === 1) return { status: "matched", model: nameMatches[0] };
+  if (nameMatches.length > 1) return { status: "ambiguous" };
+
+  return { status: "not-found" };
+}
+
+function parsePathCommandArgument(args: string): string | undefined {
+  const argsString = args.trimStart();
+  if (!argsString) return undefined;
+  const firstChar = argsString[0];
+  if (firstChar === "\"" || firstChar === "'") {
+    const closingQuoteIndex = argsString.indexOf(firstChar, 1);
+    return closingQuoteIndex < 0 ? undefined : argsString.slice(1, closingQuoteIndex);
+  }
+  const firstWhitespaceIndex = argsString.search(/\s/);
+  return firstWhitespaceIndex < 0 ? argsString : argsString.slice(0, firstWhitespaceIndex);
+}
+
+function getUnsupportedBuiltinMessage(commandName: string): string {
+  switch (commandName) {
+    case "fork":
+      return "Fork selector is not available in this view.";
+    case "import":
+      return "Session import is not implemented in pi-web yet.";
+    case "share":
+      return "Sharing sessions as GitHub gists is not implemented in pi-web yet.";
+    case "trust":
+      return "Project trust changes are not implemented in pi-web slash commands yet.";
+    case "hotkeys":
+      return "Hotkeys help is not implemented in pi-web yet.";
+    case "changelog":
+      return "Changelog view is not implemented in pi-web yet.";
+    case "quit":
+      return "Quit is not applicable in the browser. Close the tab instead.";
+    default:
+      return `/${commandName} is a pi built-in command, but pi-web does not support it yet.`;
+  }
+}
+
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
-    modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
+    modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen, onSlashUiAction,
   } = opts;
 
   const isNew = session === null && newSessionCwd !== null;
@@ -536,6 +622,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setSlashCommandsLoading(false);
     }
   }, [ensureNewSession]);
+
+  const loadForkCandidates = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return [] as ForkCandidate[];
+    const data = await sendAgentCommand<ForkCandidatesResponse>(sid, { type: "get_user_messages_for_forking" });
+    return data?.messages ?? [];
+  }, []);
 
   const connectEvents = useCallback((sid: string): Promise<void> => {
     if (eventSourceRef.current) {
@@ -1039,25 +1132,35 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return;
     setForkingEntryId(entryId);
     try {
-      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string }>(sid, {
+      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string; selectedText?: string }>(sid, {
         type: "fork",
         entryId,
       });
-      const { cancelled, newSessionId } = result ?? {};
+      const { cancelled, newSessionId, selectedText } = result ?? {};
       if (!cancelled && newSessionId) {
         onSessionForked?.(newSessionId);
+        if (selectedText) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => opts.chatInputRef?.current?.insertIfEmpty(selectedText));
+          });
+        }
       }
     } catch (e) {
       console.error("Fork failed:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {
       setForkingEntryId(null);
     }
-  }, [onSessionForked]);
+  }, [addNotice, onSessionForked, opts.chatInputRef]);
 
-  const handleNavigate = useCallback(async (entryId: string) => {
+  const handleNavigate = useCallback(async (entryId: string, options?: { summarize?: boolean }) => {
     const sid = sessionIdRef.current;
     if (!sid) return;
-    sendAgentCommand(sid, { type: "navigate_tree", targetId: entryId }).catch(() => {});
+    try {
+      await sendAgentCommand(sid, { type: "navigate_tree", targetId: entryId, ...(options?.summarize ? { summarize: true } : {}) });
+    } catch (e) {
+      console.error("Failed to navigate session tree:", e);
+    }
     setActiveLeafId(entryId);
     await loadContext(sid, entryId);
   }, [loadContext]);
@@ -1118,15 +1221,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
     if (!match) return { handled: false };
 
-    const [, commandName, rawArgs = ""] = match;
+    const [, rawCommandName, rawArgs = ""] = match;
+    const commandName = rawCommandName.toLowerCase();
     const args = rawArgs.trim();
-    const sid = sessionIdRef.current ?? await ensureNewSession();
+    const knownBuiltin = isWebBuiltinSlashCommand(commandName)
+      || slashCommands.some((command) => command.source === "builtin" && command.name.toLowerCase() === commandName);
+    if (!knownBuiltin) return { handled: false };
+
+    let didStartCompact = false;
+    let sidPromise: Promise<string | null> | null = null;
+    const getSid = () => {
+      sidPromise ??= Promise.resolve(sessionIdRef.current ?? ensureNewSession());
+      return sidPromise;
+    };
+    const emitUiAction = async (action: SlashUiAction) => {
+      if (onSlashUiAction) await onSlashUiAction(action);
+      else if (action.type === "openSessionStats") onSessionStatsPanelOpen?.();
+    };
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
       if (!result.handled) return result;
       if (result.error) {
         addNotice({ type: "error", message: result.error });
-      } else if (result.action !== "openSessionStats") {
-        addNotice({ type: "success", message: result.message ?? "Command completed" });
+      } else if (result.message) {
+        addNotice({ type: "success", message: result.message });
       }
       return result;
     };
@@ -1134,7 +1251,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       switch (commandName) {
         case "compact": {
+          const sid = await getSid();
           if (!sid || isCompacting) return complete({ handled: true, error: "No active session to compact" });
+          didStartCompact = true;
           setIsCompacting(true);
           setCompactError(null);
           setCompactResult(null);
@@ -1148,6 +1267,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "name": {
+          const sid = await getSid();
           if (!sid) return complete({ handled: true, error: "No active session to name" });
           if (!args) return complete({ handled: true, error: "Usage: /name <name>" });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
@@ -1156,16 +1276,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "session": {
+          const sid = await getSid();
           if (!sid) return complete({ handled: true, error: "No active session" });
           const stats = await sendAgentCommand<SessionStatsInfo>(sid, { type: "get_session_stats" });
-          if (stats) {
-            setSessionStatsOverride(stats);
-          }
-          onSessionStatsPanelOpen?.();
+          if (stats) setSessionStatsOverride(stats);
+          await emitUiAction({ type: "openSessionStats" });
           return complete({ handled: true, action: "openSessionStats" });
         }
 
         case "copy": {
+          const sid = await getSid();
           if (!sid) return complete({ handled: true, error: "No active session" });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
           const textToCopy = data?.text ?? "";
@@ -1174,15 +1294,103 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return complete({ handled: true, message: "Copied last assistant message" });
         }
 
-        default:
-          return { handled: false };
+        case "reload": {
+          const sid = await getSid();
+          if (!sid) return complete({ handled: true, error: "No active session to reload" });
+          if (agentRunningRef.current) return complete({ handled: true, error: "Wait for the current response to finish before reloading." });
+          if (isCompacting) return complete({ handled: true, error: "Wait for compaction to finish before reloading." });
+          await sendAgentCommand(sid, { type: "reload" });
+          await Promise.allSettled([loadSession(sid), loadTools(sid), loadSlashCommands()]);
+          return complete({ handled: true, message: "Reloaded extensions, skills, prompts, and tools" });
+        }
+
+        case "export": {
+          const sid = sessionIdRef.current;
+          if (!sid) return complete({ handled: true, error: "No active session to export" });
+          if (!args) {
+            window.location.href = `/api/sessions/${encodeURIComponent(sid)}/export`;
+            return complete({ handled: true, action: "download" });
+          }
+          const outputPath = parsePathCommandArgument(args);
+          if (!outputPath) return complete({ handled: true, error: "Usage: /export [path.html|path.jsonl]" });
+          const result = await sendAgentCommand<{ filePath?: string }>(sid, { type: "export_session", outputPath });
+          return complete({ handled: true, message: result?.filePath ? `Session exported to ${result.filePath}` : "Session exported" });
+        }
+
+        case "clone": {
+          const sid = sessionIdRef.current;
+          if (!sid) return complete({ handled: true, error: "No active session to clone" });
+          const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string }>(sid, { type: "clone" });
+          if (result?.cancelled) return complete({ handled: true, error: "Clone cancelled" });
+          if (!result?.newSessionId) return complete({ handled: true, error: "Clone did not return a new session id" });
+          onSessionForked?.(result.newSessionId);
+          return complete({ handled: true, message: "Cloned to new session" });
+        }
+
+        case "model": {
+          if (!args) {
+            await emitUiAction({ type: "openModelsConfig", section: "models" });
+            return complete({ handled: true, message: "Opened model settings" });
+          }
+          const match = findExactModelMatch(args, modelList);
+          if (match.status === "ambiguous") {
+            return complete({ handled: true, error: `Ambiguous model reference: ${args}. Use provider/model.` });
+          }
+          if (match.status === "not-found") {
+            return complete({ handled: true, error: `Model not found: ${args}` });
+          }
+          await handleModelChange(match.model.provider, match.model.id);
+          return complete({ handled: true, message: `Model: ${match.model.name || match.model.id}` });
+        }
+
+        case "tree":
+          await emitUiAction({ type: "openBranchNavigator" });
+          return complete({ handled: true });
+
+        case "fork":
+          await emitUiAction({ type: "openForkSelector" });
+          return complete({ handled: true });
+
+        case "new":
+          await emitUiAction({ type: "newSession" });
+          return complete({ handled: true });
+
+        case "resume":
+          await emitUiAction({ type: "openSessionSidebar" });
+          return complete({ handled: true, message: "Opened session list" });
+
+        case "settings":
+          await emitUiAction({ type: "openModelsConfig" });
+          return complete({ handled: true, message: "Opened settings" });
+
+        case "scoped-models":
+          await emitUiAction({ type: "openModelsConfig", section: "scoped" });
+          return complete({ handled: true, message: "Opened model settings" });
+
+        case "login":
+          await emitUiAction({ type: "openModelsConfig", section: "auth" });
+          return complete({ handled: true, message: args ? `Opened auth settings for ${args}` : "Opened auth settings" });
+
+        case "logout":
+          await emitUiAction({ type: "openModelsConfig", section: "auth" });
+          return complete({ handled: true, message: args ? `Opened auth settings for ${args}` : "Opened auth settings" });
+
+        default: {
+          const command = getWebBuiltinSlashCommand(commandName);
+          return complete({
+            handled: true,
+            error: command?.mode === "unsupported"
+              ? getUnsupportedBuiltinMessage(commandName)
+              : `/${commandName} is not supported in pi-web yet.`,
+          });
+        }
       }
     } catch (e) {
       return complete({ handled: true, error: e instanceof Error ? e.message : String(e) });
     } finally {
-      if (commandName === "compact") setIsCompacting(false);
+      if (didStartCompact) setIsCompacting(false);
     }
-  }, [addNotice, ensureNewSession, isCompacting, loadSession, promoteNewSession, onSessionStatsPanelOpen]);
+  }, [addNotice, ensureNewSession, handleModelChange, isCompacting, loadSession, loadSlashCommands, loadTools, modelList, onSessionForked, onSessionStatsPanelOpen, onSlashUiAction, promoteNewSession, slashCommands]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An
@@ -1482,7 +1690,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
+    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,
