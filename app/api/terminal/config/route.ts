@@ -5,11 +5,14 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+
 interface GhosttyTerminalConfig {
   fontFamilies: string[];
   fontSize: number | null;
   configPath: string | null;
   wsUrl: string;
+  controlUrl: string;
+  shellsUrl: string;
 }
 
 function stripQuotes(value: string): string {
@@ -20,15 +23,20 @@ function stripQuotes(value: string): string {
   return trimmed;
 }
 
-function terminalWsUrl(req: Request): string {
+function terminalUrls(req: Request): { wsUrl: string; controlUrl: string; shellsUrl: string } {
   const url = new URL(req.url);
-  const protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const httpProtocol = url.protocol === "https:" ? "https:" : "http:";
   const wsPort = process.env.TERMINAL_WS_PORT || "30142";
   const host = url.hostname.includes(":") ? `[${url.hostname}]` : url.hostname;
-  return `${protocol}//${host}:${wsPort}/api/terminal/ws`;
+  return {
+    wsUrl: `${wsProtocol}//${host}:${wsPort}/api/terminal/ws`,
+    controlUrl: `${httpProtocol}//${host}:${wsPort}/api/terminal/kill`,
+    shellsUrl: `${httpProtocol}//${host}:${wsPort}/api/terminal/shells`,
+  };
 }
 
-function parseGhosttyConfig(filePath: string, wsUrl: string): GhosttyTerminalConfig | null {
+function parseGhosttyConfig(filePath: string, urls: { wsUrl: string; controlUrl: string; shellsUrl: string }): GhosttyTerminalConfig | null {
   if (!existsSync(filePath)) return null;
   const fontFamilies: string[] = [];
   let fontSize: number | null = null;
@@ -50,7 +58,14 @@ function parseGhosttyConfig(filePath: string, wsUrl: string): GhosttyTerminalCon
   }
 
   if (fontFamilies.length === 0 && fontSize === null) return null;
-  return { fontFamilies, fontSize, configPath: filePath, wsUrl };
+  return {
+    fontFamilies,
+    fontSize,
+    configPath: filePath,
+    wsUrl: urls.wsUrl,
+    controlUrl: urls.controlUrl,
+    shellsUrl: urls.shellsUrl,
+  };
 }
 
 function configCandidates(): string[] {
@@ -67,16 +82,19 @@ function configCandidates(): string[] {
 }
 
 export async function GET(req: Request) {
-  const wsUrl = terminalWsUrl(req);
+  const urls = terminalUrls(req);
   for (const candidate of configCandidates()) {
-    const parsed = parseGhosttyConfig(candidate, wsUrl);
+    const parsed = parseGhosttyConfig(candidate, urls);
     if (parsed) return NextResponse.json(parsed);
   }
 
+  const fontFamilies = ["MesloLGS NF", "D2CodingLigature Nerd Font Mono"];
   return NextResponse.json({
-    fontFamilies: ["MesloLGS NF", "D2CodingLigature Nerd Font Mono"],
+    fontFamilies,
     fontSize: 16,
     configPath: null,
-    wsUrl,
+    wsUrl: urls.wsUrl,
+    controlUrl: urls.controlUrl,
+    shellsUrl: urls.shellsUrl,
   } satisfies GhosttyTerminalConfig);
 }

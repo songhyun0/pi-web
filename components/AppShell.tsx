@@ -475,6 +475,11 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const gitChangesCwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null;
+  const terminalScopeId = selectedSession?.id
+    ? `session:${selectedSession.id}`
+    : gitChangesCwd
+      ? `cwd:${gitChangesCwd}`
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -1327,7 +1332,7 @@ export function AppShell() {
           {rightPanelView === "changes" ? (
             <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
           ) : rightPanelView === "terminal" ? (
-            <TerminalPanel cwd={gitChangesCwd} />
+            <TerminalPanel cwd={gitChangesCwd} scopeId={terminalScopeId} />
           ) : activeFileTab?.filePath ? (
             <FileViewer filePath={activeFileTab.filePath} cwd={activeCwd ?? undefined} />
           ) : (
