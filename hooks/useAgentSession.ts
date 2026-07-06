@@ -778,6 +778,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentRunning(false);
       setAgentPhase(null);
       setRetryInfo(null);
+      setIsCompacting(false);
       dispatch({ type: "end" });
       onAgentEnd?.();
     }
@@ -822,6 +823,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // and the user already started the next one while this request was in
       // flight) — everything in it is stale, drop it.
       if (promptRunIdRef.current !== runId) return;
+      // The run may have finished while this request was in flight. Do not let
+      // a stale snapshot resurrect the compaction indicator after agent_end.
+      if (!agentRunningRef.current) return;
       const state = data.state;
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
@@ -887,6 +891,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentRunning(false);
         setAgentPhase(null);
         setRetryInfo(null);
+        setIsCompacting(false);
         dispatch({ type: "end" });
         if (sessionIdRef.current) {
           loadSession(sessionIdRef.current);
