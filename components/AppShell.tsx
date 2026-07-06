@@ -14,6 +14,7 @@ import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
 import type { SlashUiAction } from "@/lib/slash-command-registry";
@@ -64,26 +65,6 @@ function readStoredWidth(key: string, fallback: number, min: number, max: number
     return clampWidth(fallback, min, max);
   }
 }
-
-function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    return navigator.clipboard.writeText(text);
-  }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    return Promise.resolve();
-  } catch {
-    return Promise.reject();
-  }
-}
-
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
