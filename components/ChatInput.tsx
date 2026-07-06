@@ -851,7 +851,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     || normalizedOpenAIFastStatus.includes("unavailable")
     || normalizedOpenAIFastStatus.includes("n/a");
   const openAIFastButtonDisabled = isStreaming || fastToggleBusy || !onOpenAIFastToggle || openAIFastUnavailable;
-  const openAIFastLabel = openAIFastUnavailable ? "Fast N/A" : openAIFastActive ? "⚡ Fast" : "Normal";
+  const openAIFastLabel = openAIFastUnavailable ? "Fast N/A" : openAIFastActive ? "Fast" : "Normal";
   const openAIFastCompactLabel = openAIFastUnavailable ? "N/A" : openAIFastActive ? "Fast" : "Norm";
   const openAIFastTitle = openAIFastUnavailable
     ? "OpenAI Fast mode is unavailable for the current model"
@@ -1575,28 +1575,32 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   gap: 5,
                   height: 32,
                   padding: isMobile ? "0 8px" : "8px 10px",
-                  background: openAIFastActive ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none",
-                  border: `1px solid ${openAIFastActive ? "color-mix(in srgb, var(--accent) 45%, var(--border))" : "transparent"}`,
+                  background: "none",
+                  border: "none",
                   borderRadius: 9,
-                  color: openAIFastActive ? "var(--accent)" : "var(--text-muted)",
+                  color: "var(--text-muted)",
                   cursor: openAIFastButtonDisabled ? "not-allowed" : "pointer",
                   fontSize: 12,
-                  fontWeight: openAIFastActive ? 600 : 500,
+                  fontWeight: 500,
                   opacity: openAIFastButtonDisabled ? 0.5 : 1,
                   whiteSpace: "nowrap",
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                  transition: "background 0.12s, color 0.12s",
                 }}
                 onMouseEnter={(e) => {
                   if (openAIFastButtonDisabled) return;
-                  e.currentTarget.style.background = openAIFastActive ? "color-mix(in srgb, var(--accent) 16%, transparent)" : "var(--bg-hover)";
-                  e.currentTarget.style.color = openAIFastActive ? "var(--accent)" : "var(--text)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = openAIFastActive ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none";
-                  e.currentTarget.style.color = openAIFastActive ? "var(--accent)" : "var(--text-muted)";
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                <span aria-hidden="true">⚡</span>
+                {openAIFastActive && (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                )}
                 <span>{isMobile ? openAIFastCompactLabel : openAIFastLabel}</span>
               </button>
             )}
