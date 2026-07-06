@@ -168,6 +168,44 @@ const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space", "Spacebar"]);
+const TOOL_PRESET_STORAGE_KEY = "pi-web-default-tool-preset";
+const THINKING_LEVEL_STORAGE_KEY = "pi-web-default-thinking-level";
+const FALLBACK_TOOL_PRESET: "none" | "default" | "full" = "full";
+const FALLBACK_THINKING_LEVEL: ThinkingLevelOption = "xhigh";
+const TOOL_PRESET_VALUES = new Set(["none", "default", "full"]);
+const THINKING_LEVEL_VALUES = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh"]);
+
+function readLocalStorageValue(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures (private windows, denied storage, etc.).
+  }
+}
+
+function readStoredToolPreset(): "none" | "default" | "full" {
+  const value = readLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
+  return TOOL_PRESET_VALUES.has(value ?? "") ? value as "none" | "default" | "full" : FALLBACK_TOOL_PRESET;
+}
+
+function readStoredThinkingLevel(): ThinkingLevelOption {
+  const value = readLocalStorageValue(THINKING_LEVEL_STORAGE_KEY);
+  return THINKING_LEVEL_VALUES.has(value ?? "") ? value as ThinkingLevelOption : FALLBACK_THINKING_LEVEL;
+}
+
+function hasStoredThinkingLevel(): boolean {
+  return THINKING_LEVEL_VALUES.has(readLocalStorageValue(THINKING_LEVEL_STORAGE_KEY) ?? "");
+}
 
 function createNoticeId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -298,6 +336,7 @@ type ModelsResponse = {
   models: Record<string, string>;
   modelList?: ModelEntry[];
   defaultModel?: SelectedModel | null;
+  defaultThinkingLevel?: ThinkingLevelOption;
   thinkingLevels?: Record<string, string[]>;
   thinkingLevelMaps?: Record<string, Record<string, string | null>>;
 };
@@ -399,8 +438,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
-  const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">("default");
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
+  const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(() => readStoredToolPreset());
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(() => readStoredThinkingLevel());
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -1481,6 +1520,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     setThinkingLevel(level);
+    writeLocalStorageValue(THINKING_LEVEL_STORAGE_KEY, level);
     if (level === "auto") return; // "auto" leaves pi's current setting untouched
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (!sid) return;
@@ -1495,6 +1535,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const { PRESET_NONE, PRESET_DEFAULT, PRESET_FULL } = await import("@/lib/tool-presets");
     const toolNames = preset === "none" ? PRESET_NONE : preset === "default" ? PRESET_DEFAULT : PRESET_FULL;
     setToolPresetState(preset);
+    writeLocalStorageValue(TOOL_PRESET_STORAGE_KEY, preset);
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (!sid) return;
     try {
@@ -1635,6 +1676,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           : undefined;
         const displayModel = match ?? nextModelList[0];
         setNewSessionDefaultModel(displayModel ? { provider: displayModel.provider, modelId: displayModel.id } : null);
+        if (!hasStoredThinkingLevel() && d.defaultThinkingLevel && THINKING_LEVEL_VALUES.has(d.defaultThinkingLevel)) {
+          setThinkingLevel(d.defaultThinkingLevel);
+        }
       }
     }).catch((e) => {
       if (e instanceof DOMException && e.name === "AbortError") return;

@@ -19,6 +19,7 @@ export async function GET(req: Request) {
   const nameMap = new Map<string, string>();
   let modelList: { id: string; name: string; provider: string }[] = [];
   let defaultModel: { provider: string; modelId: string } | null = null;
+  let defaultThinkingLevel: string | undefined;
   const thinkingLevels: Record<string, string[]> = {};
   const thinkingLevelMaps: Record<string, Record<string, string | null>> = {};
   const cwd = new URL(req.url).searchParams.get("cwd") || process.cwd();
@@ -53,10 +54,11 @@ export async function GET(req: Request) {
     const settings: SettingsManager = services.settingsManager;
     const provider = settings.getDefaultProvider();
     const modelId = settings.getDefaultModel();
+    defaultThinkingLevel = settings.getDefaultThinkingLevel();
     if (provider && modelId && available.some((m) => m.provider === provider && m.id === modelId)) {
       defaultModel = { provider, modelId };
     }
   } catch { /* return empty */ }
 
-  return Response.json({ models: Object.fromEntries(nameMap), modelList, defaultModel, thinkingLevels, thinkingLevelMaps });
+  return Response.json({ models: Object.fromEntries(nameMap), modelList, defaultModel, defaultThinkingLevel, thinkingLevels, thinkingLevelMaps });
 }
