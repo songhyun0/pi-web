@@ -6,6 +6,7 @@ import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { GitChangesPanel } from "./GitChangesPanel";
+import { TerminalPanel } from "./TerminalPanel";
 import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
@@ -285,7 +286,7 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-  const [rightPanelView, setRightPanelView] = useState<"changes" | "file">("changes");
+  const [rightPanelView, setRightPanelView] = useState<"changes" | "terminal" | "file">("changes");
   const [gitChangesCount, setGitChangesCount] = useState<number | null>(null);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
@@ -451,6 +452,12 @@ export function AppShell() {
 
   const handleOpenChanges = useCallback(() => {
     setRightPanelView("changes");
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleOpenTerminal = useCallback(() => {
+    setRightPanelView("terminal");
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
@@ -1274,6 +1281,32 @@ export function AppShell() {
               </span>
             )}
           </button>
+          <button
+            onClick={handleOpenTerminal}
+            title="Open terminal"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              height: 36,
+              padding: "0 12px",
+              border: "none",
+              borderRight: "1px solid var(--border)",
+              background: rightPanelView === "terminal" ? "var(--bg)" : "var(--bg-panel)",
+              color: rightPanelView === "terminal" ? "var(--text)" : "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              userSelect: "none",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: rightPanelView === "terminal" ? 1 : 0.75 }}>
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            <span style={{ fontWeight: rightPanelView === "terminal" ? 500 : 400 }}>Terminal</span>
+          </button>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
               tabs={fileTabs}
@@ -1293,6 +1326,8 @@ export function AppShell() {
         <div style={{ flex: 1, overflow: "hidden" }}>
           {rightPanelView === "changes" ? (
             <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
+          ) : rightPanelView === "terminal" ? (
+            <TerminalPanel cwd={gitChangesCwd} />
           ) : activeFileTab?.filePath ? (
             <FileViewer filePath={activeFileTab.filePath} cwd={activeCwd ?? undefined} />
           ) : (
