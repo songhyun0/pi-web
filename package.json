@@ -28,6 +28,7 @@
     "dev": "next dev -p 30141",
     "build": "next build --webpack",
     "start": "next start -p 30141",
+    "deploy:local": "npm run build && launchctl kickstart -k gui/$(id -u)/com.agegr.pi-web",
     "lint": "eslint .",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
