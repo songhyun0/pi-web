@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
@@ -19,6 +19,48 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
 type SessionCopyField = "file" | "id";
+
+type ResizingPanel = "sidebar" | "right";
+
+const SIDEBAR_WIDTH_STORAGE_KEY = "pi-sidebar-width";
+const RIGHT_PANEL_WIDTH_STORAGE_KEY = "pi-right-panel-width";
+const SIDEBAR_DEFAULT_WIDTH = 260;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 520;
+const RIGHT_PANEL_DEFAULT_WIDTH = 560;
+const RIGHT_PANEL_MIN_WIDTH = 300;
+const RIGHT_PANEL_MAX_WIDTH = 960;
+
+function clampWidth(value: number, min: number, max: number): number {
+  const safeMax = Math.max(min, max);
+  return Math.min(Math.max(Math.round(value), min), safeMax);
+}
+
+function getSidebarMaxWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_MAX_WIDTH;
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.floor(window.innerWidth * 0.5)));
+}
+
+function getRightPanelMaxWidth(): number {
+  if (typeof window === "undefined") return RIGHT_PANEL_MAX_WIDTH;
+  return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, Math.floor(window.innerWidth * 0.75)));
+}
+
+function getRightPanelDefaultWidth(): number {
+  if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
+  return clampWidth(Math.round(window.innerWidth * 0.42), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth());
+}
+
+function readStoredWidth(key: string, fallback: number, min: number, max: number): number {
+  if (typeof window === "undefined") return clampWidth(fallback, min, max);
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed) ? clampWidth(parsed, min, max) : clampWidth(fallback, min, max);
+  } catch {
+    return clampWidth(fallback, min, max);
+  }
+}
 
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -56,6 +98,10 @@ export function AppShell() {
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
+  const [layoutPrefsLoaded, setLayoutPrefsLoaded] = useState(false);
+  const [resizingPanel, setResizingPanel] = useState<ResizingPanel | null>(null);
   // On mobile the sidebar is an overlay drawer; hide it by default so the chat
   // is visible on load. Runs once the breakpoint resolves after hydration.
   useEffect(() => {
@@ -64,6 +110,32 @@ export function AppShell() {
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+
+  useEffect(() => {
+    setSidebarWidth(readStoredWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+    setRightPanelWidth(readStoredWidth(RIGHT_PANEL_WIDTH_STORAGE_KEY, getRightPanelDefaultWidth(), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+    setLayoutPrefsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!layoutPrefsLoaded || resizingPanel) return;
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+      window.localStorage.setItem(RIGHT_PANEL_WIDTH_STORAGE_KEY, String(rightPanelWidth));
+    } catch {
+      // Ignore storage failures (private windows, denied storage, etc.).
+    }
+  }, [layoutPrefsLoaded, resizingPanel, sidebarWidth, rightPanelWidth]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setSidebarWidth((width) => clampWidth(width, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+      setRightPanelWidth((width) => clampWidth(width, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
 
@@ -134,6 +206,68 @@ export function AppShell() {
     if (isMobile) setActiveTopPanel(null);
     setSidebarOpen((open) => !open);
   }, [isMobile]);
+
+  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isMobile || !sidebarOpen) return;
+    event.preventDefault();
+    setActiveTopPanel(null);
+    setResizingPanel("sidebar");
+
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const stopResize = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setResizingPanel(null);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setSidebarWidth(clampWidth(startWidth + moveEvent.clientX - startX, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+    };
+
+    window.addEventListener("pointermove", handleMove, { passive: false });
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }, [isMobile, sidebarOpen, sidebarWidth]);
+
+  const startRightPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isMobile) return;
+    event.preventDefault();
+    setActiveTopPanel(null);
+    setResizingPanel("right");
+
+    const startX = event.clientX;
+    const startWidth = rightPanelWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const stopResize = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setResizingPanel(null);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setRightPanelWidth(clampWidth(startWidth - (moveEvent.clientX - startX), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+    };
+
+    window.addEventListener("pointermove", handleMove, { passive: false });
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }, [isMobile, rightPanelWidth]);
 
   useEffect(() => {
     if (!activeTopPanel || !topBarRef.current) return;
@@ -493,6 +627,33 @@ export function AppShell() {
         background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 24%, transparent), transparent);
         animation: session-info-light-wash 620ms ease-out both;
       }
+      .panel-resize-handle {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        z-index: 20;
+        width: 8px !important;
+        min-width: 8px !important;
+        cursor: col-resize;
+        touch-action: none;
+        background: transparent;
+        transition: background 0.12s ease;
+      }
+      .panel-resize-handle:hover,
+      .panel-resize-handle.active {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      .sidebar-resize-handle {
+        right: 0;
+      }
+      .right-panel-resize-handle {
+        left: 0;
+      }
+      @media (max-width: 640px) {
+        .panel-resize-handle {
+          display: none;
+        }
+      }
       @media (prefers-reduced-motion: reduce) {
         .session-info-popover,
         .session-info-popover::after {
@@ -528,17 +689,28 @@ export function AppShell() {
 
       {/* Left sidebar */}
       <div
-        className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
+        className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${resizingPanel === "sidebar" ? " sidebar-resizing" : ""}`}
         style={{
+          "--sidebar-width": `${sidebarWidth}px`,
           background: "var(--bg-panel)",
           borderRight: "1px solid var(--border)",
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
           zIndex: 200,
-        }}
+        } as CSSProperties}
       >
         {sidebarContent}
+        {sidebarOpen && !isMobile && (
+          <div
+            className={`panel-resize-handle sidebar-resize-handle${resizingPanel === "sidebar" ? " active" : ""}`}
+            onPointerDown={startSidebarResize}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            title="Resize sidebar"
+          />
+        )}
       </div>
 
       {/* Center: chat */}
@@ -1033,16 +1205,28 @@ export function AppShell() {
         </div>
       </div>
 
-      {/* Right panel: file viewer — always mounted, width animated via CSS */}
+      {/* Right panel: changes/file viewer — always mounted, width animated via CSS */}
       <div
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
+        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${resizingPanel === "right" ? " right-panel-resizing" : ""}`}
         style={{
+          "--right-panel-width": `${rightPanelWidth}px`,
           display: "flex",
           flexDirection: "column",
           borderLeft: "1px solid var(--border)",
           background: "var(--bg)",
-        }}
+        } as CSSProperties}
       >
+        {rightPanelOpen && !isMobile && (
+          <div
+            className={`panel-resize-handle right-panel-resize-handle${resizingPanel === "right" ? " active" : ""}`}
+            onPointerDown={startRightPanelResize}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize right panel"
+            title="Resize right panel"
+          />
+        )}
+
         {/* Right panel tab bar */}
         <div style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
           <button

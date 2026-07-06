@@ -511,9 +511,12 @@ span.linenumber {
     overflow: hidden;
     transition: width 0.2s ease, min-width 0.2s ease;
   }
+  .sidebar-container.sidebar-resizing {
+    transition: none !important;
+  }
   .sidebar-container.sidebar-open {
-    width: 260px;
-    min-width: 260px;
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
   }
   .sidebar-container.sidebar-closed {
     width: 0;
@@ -521,9 +524,9 @@ span.linenumber {
     border-right: none !important;
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
-  .sidebar-container > * {
-    width: 260px;
-    min-width: 260px;
+  .sidebar-container > :not(.panel-resize-handle) {
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
   }
 }
 
@@ -531,12 +534,16 @@ span.linenumber {
 /* Right panel: animate width */
 @media (min-width: 641px) {
   .right-panel-container {
+    position: relative;
     overflow: hidden;
     transition: width 0.2s ease, min-width 0.2s ease;
     flex-shrink: 0;
   }
+  .right-panel-container.right-panel-resizing {
+    transition: none !important;
+  }
   .right-panel-container.right-panel-open {
-    width: 42%;
+    width: var(--right-panel-width, 42vw);
     min-width: 300px;
   }
   .right-panel-container.right-panel-closed {
@@ -545,8 +552,8 @@ span.linenumber {
     border-left: none !important;
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
-  .right-panel-container > * {
-    width: 42vw;
+  .right-panel-container > :not(.panel-resize-handle) {
+    width: var(--right-panel-width, 42vw);
     min-width: 300px;
   }
 }
