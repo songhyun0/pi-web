@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { FileExplorer } from "./FileExplorer";
 import { DirectoryPickerModal } from "./DirectoryPickerModal";
 
@@ -158,6 +159,31 @@ function PathLabel({ text, style }: { text: string; style?: CSSProperties }) {
 }
 
 const DROPDOWN_ANIMATION_MS = 140;
+const SESSION_SWIPE_ACTION_WIDTH = 88;
+const SESSION_SWIPE_AXIS_LOCK_PX = 8;
+const SESSION_SWIPE_AXIS_RATIO = 1.2;
+const SESSION_SWIPE_OPEN_THRESHOLD = 44;
+const SESSION_SWIPE_SUPPRESS_CLICK_MS = 350;
+const SESSION_SWIPE_OPEN_EVENT = "pi-web:session-swipe-open";
+
+type SessionSwipeAxis = "x" | "y";
+
+interface SessionSwipeGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startOffset: number;
+  axis: SessionSwipeAxis | null;
+  moved: boolean;
+}
+
+function clampSessionSwipeOffset(value: number): number {
+  return Math.max(0, Math.min(SESSION_SWIPE_ACTION_WIDTH, value));
+}
+
+function isInteractiveSwipeTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("button,input,textarea,select,a,[role='button']"));
+}
 
 function AnimatedDropdown({ open, children, style }: { open: boolean; children: ReactNode; style: CSSProperties }) {
   const [mounted, setMounted] = useState(open);
@@ -348,6 +374,7 @@ function PiAgentTitle({ appName }: { appName: string }) {
 }
 
 export function SessionSidebar({ appName = DEFAULT_APP_DISPLAY_NAME, selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention }: Props) {
+  const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1521,6 +1548,7 @@ export function SessionSidebar({ appName = DEFAULT_APP_DISPLAY_NAME, selectedSes
                 selectedSessionId={selectedSessionId}
                 runningSessionIds={runningSessionIds}
                 unreadSessionIds={unreadSessionIds}
+                isMobile={isMobile}
                 onSelectSession={handleSelectSessionFromList}
                 onRenamed={loadSessions}
                 onSessionDeleted={(id) => {
@@ -1538,6 +1566,7 @@ export function SessionSidebar({ appName = DEFAULT_APP_DISPLAY_NAME, selectedSes
             selectedSessionId={selectedSessionId}
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
+            isMobile={isMobile}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
@@ -1662,6 +1691,7 @@ function SessionTreeItem({
   selectedSessionId,
   runningSessionIds,
   unreadSessionIds,
+  isMobile,
   onSelectSession,
   onRenamed,
   onSessionDeleted,
@@ -1671,6 +1701,7 @@ function SessionTreeItem({
   selectedSessionId: string | null;
   runningSessionIds: Set<string>;
   unreadSessionIds: Set<string>;
+  isMobile: boolean;
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
@@ -1698,6 +1729,7 @@ function SessionTreeItem({
           isSelected={node.session.id === selectedSessionId}
           isRunning={runningSessionIds.has(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
+          isMobile={isMobile}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
@@ -1716,6 +1748,7 @@ function SessionTreeItem({
               selectedSessionId={selectedSessionId}
               runningSessionIds={runningSessionIds}
               unreadSessionIds={unreadSessionIds}
+              isMobile={isMobile}
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
@@ -1796,6 +1829,7 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isMobile,
   onClick,
   onRenamed,
   onDeleted,
@@ -1808,6 +1842,7 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isMobile: boolean;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
@@ -1821,16 +1856,77 @@ function SessionItem({
   const [renameValue, setRenameValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [swipeOpen, setSwipeOpen] = useState(false);
+  const [swipeDragging, setSwipeDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const swipeRef = useRef<SessionSwipeGesture | null>(null);
+  const suppressSwipeClickRef = useRef(false);
+  const suppressSwipeClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
 
+  const closeSwipe = useCallback(() => {
+    setSwipeOpen(false);
+    setSwipeOffset(0);
+  }, []);
+
+  const openSwipe = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(SESSION_SWIPE_OPEN_EVENT, { detail: { id: session.id } }));
+    setSwipeOpen(true);
+    setSwipeOffset(SESSION_SWIPE_ACTION_WIDTH);
+  }, [session.id]);
+
+  const clearSwipeClickSuppression = useCallback(() => {
+    if (suppressSwipeClickTimerRef.current) {
+      clearTimeout(suppressSwipeClickTimerRef.current);
+      suppressSwipeClickTimerRef.current = null;
+    }
+    suppressSwipeClickRef.current = false;
+  }, []);
+
+  const suppressNextSwipeClick = useCallback(() => {
+    suppressSwipeClickRef.current = true;
+    if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
+    suppressSwipeClickTimerRef.current = setTimeout(() => {
+      suppressSwipeClickRef.current = false;
+      suppressSwipeClickTimerRef.current = null;
+    }, SESSION_SWIPE_SUPPRESS_CLICK_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isMobile) return;
+    setHovered(false);
+    closeSwipe();
+  }, [isMobile, closeSwipe]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const handleOtherSwipeOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail;
+      if (detail?.id !== session.id) closeSwipe();
+    };
+    window.addEventListener(SESSION_SWIPE_OPEN_EVENT, handleOtherSwipeOpen);
+    return () => window.removeEventListener(SESSION_SWIPE_OPEN_EVENT, handleOtherSwipeOpen);
+  }, [isMobile, session.id, closeSwipe]);
+
+  useEffect(() => {
+    if (isSelected || confirmDelete || renaming || deleting) closeSwipe();
+  }, [isSelected, confirmDelete, renaming, deleting, closeSwipe]);
+
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    closeSwipe();
     setRenameValue(session.name ?? "");
     setRenaming(true);
     setTimeout(() => inputRef.current?.select(), 0);
-  }, [session.name]);
+  }, [session.name, closeSwipe]);
 
   const commitRename = useCallback(async () => {
     const name = renameValue.trim();
@@ -1850,8 +1946,9 @@ function SessionItem({
 
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    closeSwipe();
     setConfirmDelete(true);
-  }, []);
+  }, [closeSwipe]);
 
   const handleDeleteConfirm = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1870,231 +1967,385 @@ function SessionItem({
     setConfirmDelete(false);
   }, []);
 
+  const handleRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (suppressSwipeClickRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearSwipeClickSuppression();
+      return;
+    }
+    if (isMobile && swipeOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSwipe();
+      return;
+    }
+    onClick();
+  }, [clearSwipeClickSuppression, closeSwipe, isMobile, onClick, swipeOpen]);
+
+  const handlePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isMobile || confirmDelete || renaming || deleting) return;
+    if (e.button !== 0 || isInteractiveSwipeTarget(e.target)) return;
+
+    swipeRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      startOffset: swipeOpen ? SESSION_SWIPE_ACTION_WIDTH : 0,
+      axis: null,
+      moved: false,
+    };
+    setSwipeDragging(true);
+  }, [confirmDelete, deleting, isMobile, renaming, swipeOpen]);
+
+  const handlePointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = swipeRef.current;
+    if (!gesture || gesture.pointerId !== e.pointerId) return;
+
+    const dx = e.clientX - gesture.startX;
+    const dy = e.clientY - gesture.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (!gesture.axis) {
+      if (absX < SESSION_SWIPE_AXIS_LOCK_PX && absY < SESSION_SWIPE_AXIS_LOCK_PX) return;
+      if (absY > absX * SESSION_SWIPE_AXIS_RATIO) {
+        gesture.axis = "y";
+        setSwipeDragging(false);
+        return;
+      }
+      if (absX <= absY * SESSION_SWIPE_AXIS_RATIO) return;
+
+      gesture.axis = "x";
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Some browsers throw if capture is unavailable or already lost.
+      }
+    }
+
+    if (gesture.axis !== "x") return;
+    e.preventDefault();
+
+    const nextOffset = clampSessionSwipeOffset(gesture.startOffset - dx);
+    if (absX > SESSION_SWIPE_AXIS_LOCK_PX) gesture.moved = true;
+    setSwipeOffset(nextOffset);
+  }, []);
+
+  const finishSwipe = useCallback((e: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
+    const gesture = swipeRef.current;
+    if (!gesture || gesture.pointerId !== e.pointerId) return;
+
+    swipeRef.current = null;
+    setSwipeDragging(false);
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // Ignore capture state races.
+    }
+
+    if (gesture.axis !== "x" || cancelled) {
+      if (cancelled) closeSwipe();
+      return;
+    }
+
+    e.preventDefault();
+    const finalOffset = clampSessionSwipeOffset(gesture.startOffset - (e.clientX - gesture.startX));
+    if (gesture.moved) suppressNextSwipeClick();
+    if (finalOffset >= SESSION_SWIPE_OPEN_THRESHOLD) openSwipe();
+    else closeSwipe();
+  }, [closeSwipe, openSwipe, suppressNextSwipeClick]);
+
+  const handlePointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    finishSwipe(e);
+  }, [finishSwipe]);
+
+  const handlePointerCancel = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    finishSwipe(e, true);
+  }, [finishSwipe]);
+
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
   const ITEM_HEIGHT = 54;
+  const rowBackground = confirmDelete
+    ? "rgba(239,68,68,0.06)"
+    : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent";
+  const rowBorderLeft = confirmDelete
+    ? "2px solid #ef4444"
+    : isSelected ? "2px solid var(--accent)" : "2px solid transparent";
 
   return (
     <div
-      onClick={confirmDelete || renaming ? undefined : onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); }}
       style={{
+        position: "relative",
         height: ITEM_HEIGHT,
-        display: "flex",
-        alignItems: "center",
-        paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
-        paddingRight: 8,
-        cursor: confirmDelete || renaming ? "default" : "pointer",
-        background: confirmDelete
-          ? "rgba(239,68,68,0.06)"
-          : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
-        borderLeft: confirmDelete
-          ? "2px solid #ef4444"
-          : isSelected ? "2px solid var(--accent)" : "2px solid transparent",
-        transition: "background 0.1s",
-        opacity: deleting ? 0.5 : 1,
-        gap: 6,
         overflow: "hidden",
+        opacity: deleting ? 0.5 : 1,
       }}
     >
-      {confirmDelete ? (
-        /* ── Delete confirmation: same height, two flat buttons ── */
-        <>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Delete <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</span>?
-          </div>
-          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-            <button
-              onClick={handleDeleteConfirm}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                height: 30, padding: "0 11px",
-                background: "#ef4444", border: "none",
-                borderRadius: 6, color: "#fff",
-                cursor: "pointer", fontSize: 12, fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                <path d="M10 11v6M14 11v6" />
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-              </svg>
-              Delete
-            </button>
-            <button
-              onClick={handleDeleteCancel}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                height: 30, padding: "0 11px",
-                background: "var(--bg)", border: "1px solid var(--border)",
-                borderRadius: 6, color: "var(--text-muted)",
-                cursor: "pointer", fontSize: 12, fontWeight: 500,
-                whiteSpace: "nowrap",
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : renaming ? (
-        /* ── Rename: input fills the same row ── */
-        <input
-          ref={inputRef}
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") setRenaming(false);
-          }}
-          autoFocus
+      {isMobile && !confirmDelete && !renaming && (
+        <button
+          type="button"
+          aria-label={`Delete ${title}`}
+          title="Delete"
+          onClick={handleDeleteClick}
           style={{
-            flex: 1,
-            fontSize: 12,
-            padding: "5px 8px",
-            border: "1px solid var(--accent)",
-            borderRadius: 5,
-            outline: "none",
-            background: "var(--bg)",
-            color: "var(--text)",
-            height: 30,
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: SESSION_SWIPE_ACTION_WIDTH,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 2,
+            border: "none",
+            background: "#ef4444",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: "pointer",
+            opacity: swipeOffset > 4 ? 1 : 0,
+            pointerEvents: swipeOffset > 8 ? "auto" : "none",
+            transition: swipeDragging ? "none" : "opacity 0.16s ease",
           }}
-        />
-      ) : (
-        /* ── Normal view ── */
-        <>
-          {/* Fork indicator for child sessions */}
-          {depth > 0 && (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-          )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                minWidth: 0,
-                fontSize: 12,
-                fontWeight: isSelected ? 500 : 400,
-                lineHeight: 1.4,
-                color: "var(--text)",
-              }}
-              title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
-            >
-              {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                {title}
-              </span>
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6M14 11v6" />
+            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+          </svg>
+          Delete
+        </button>
+      )}
+      <div
+        onClick={confirmDelete || renaming || deleting ? undefined : handleRowClick}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onMouseEnter={() => { if (!isMobile) setHovered(true); }}
+        onMouseLeave={() => { setHovered(false); }}
+        style={{
+          position: "relative",
+          zIndex: 1,
+          width: "100%",
+          height: ITEM_HEIGHT,
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
+          paddingRight: 8,
+          cursor: confirmDelete || renaming || deleting ? "default" : "pointer",
+          background: rowBackground,
+          borderLeft: rowBorderLeft,
+          transition: swipeDragging ? "background 0.1s" : "transform 0.16s ease, background 0.1s",
+          transform: isMobile ? `translateX(-${swipeOffset}px)` : undefined,
+          touchAction: isMobile ? "pan-y" : undefined,
+          gap: 6,
+          overflow: "hidden",
+          willChange: isMobile ? "transform" : undefined,
+        }}
+      >
+        {confirmDelete ? (
+          /* ── Delete confirmation: same height, two flat buttons ── */
+          <>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Delete <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</span>?
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
-              <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
-              <span>{session.messageCount} msgs</span>
-              {session.worktreeBranch && (
-                <span
-                  title={`Worktree: ${session.cwd}`}
-                  style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--accent)", minWidth: 0, overflow: "hidden" }}
-                >
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <line x1="6" y1="3" x2="6" y2="15" />
-                    <circle cx="18" cy="6" r="3" />
-                    <circle cx="6" cy="18" r="3" />
-                    <path d="M18 9a9 9 0 0 1-9 9" />
-                  </svg>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.worktreeBranch}</span>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Collapse toggle — always visible when has children */}
-          {hasChildren && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
-              title={collapsed ? "Expand forks" : "Collapse forks"}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                width: 20, height: 20, padding: 0, flexShrink: 0,
-                background: "none", border: "none",
-                color: "var(--text-dim)", cursor: "pointer",
-                transform: collapsed ? "rotate(-90deg)" : "none",
-                transition: "transform 0.15s",
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="2 3.5 5 6.5 8 3.5" />
-              </svg>
-            </button>
-          )}
-
-          {/* Action buttons — shown on hover */}
-          {hovered && (
-            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
               <button
-                onClick={startRename}
-                title="Rename"
+                onClick={handleDeleteConfirm}
                 style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 7, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                  e.currentTarget.style.color = "var(--accent)";
-                  e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                  height: 30, padding: "0 11px",
+                  background: "#ef4444", border: "none",
+                  borderRadius: 6, color: "#fff",
+                  cursor: "pointer", fontSize: 12, fontWeight: 600,
+                  whiteSpace: "nowrap",
                 }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                </svg>
-              </button>
-              <button
-                onClick={handleDeleteClick}
-                title="Delete"
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 7, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(239,68,68,0.08)";
-                  e.currentTarget.style.color = "#ef4444";
-                  e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                   <path d="M10 11v6M14 11v6" />
                   <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                 </svg>
+                Delete
+              </button>
+              <button
+                onClick={handleDeleteCancel}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  height: 30, padding: "0 11px",
+                  background: "var(--bg)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--text-muted)",
+                  cursor: "pointer", fontSize: 12, fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Cancel
               </button>
             </div>
-          )}
-        </>
-      )}
+          </>
+        ) : renaming ? (
+          /* ── Rename: input fills the same row ── */
+          <input
+            ref={inputRef}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setRenaming(false);
+            }}
+            autoFocus
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "5px 8px",
+              border: "1px solid var(--accent)",
+              borderRadius: 5,
+              outline: "none",
+              background: "var(--bg)",
+              color: "var(--text)",
+              height: 30,
+            }}
+          />
+        ) : (
+          /* ── Normal view ── */
+          <>
+            {/* Fork indicator for child sessions */}
+            {depth > 0 && (
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <line x1="6" y1="3" x2="6" y2="15" />
+                <circle cx="18" cy="6" r="3" />
+                <circle cx="6" cy="18" r="3" />
+                <path d="M18 9a9 9 0 0 1-9 9" />
+              </svg>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  minWidth: 0,
+                  fontSize: 12,
+                  fontWeight: isSelected ? 500 : 400,
+                  lineHeight: 1.4,
+                  color: "var(--text)",
+                }}
+                title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
+              >
+                {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                  {title}
+                </span>
+              </div>
+              <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+                <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
+                <span>{session.messageCount} msgs</span>
+                {session.worktreeBranch && (
+                  <span
+                    title={`Worktree: ${session.cwd}`}
+                    style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--accent)", minWidth: 0, overflow: "hidden" }}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <line x1="6" y1="3" x2="6" y2="15" />
+                      <circle cx="18" cy="6" r="3" />
+                      <circle cx="6" cy="18" r="3" />
+                      <path d="M18 9a9 9 0 0 1-9 9" />
+                    </svg>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.worktreeBranch}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Collapse toggle — always visible when has children */}
+            {hasChildren && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
+                title={collapsed ? "Expand forks" : "Collapse forks"}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 20, height: 20, padding: 0, flexShrink: 0,
+                  background: "none", border: "none",
+                  color: "var(--text-dim)", cursor: "pointer",
+                  transform: collapsed ? "rotate(-90deg)" : "none",
+                  transition: "transform 0.15s",
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="2 3.5 5 6.5 8 3.5" />
+                </svg>
+              </button>
+            )}
+
+            {/* Action buttons — shown on hover */}
+            {hovered && (
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button
+                  onClick={startRename}
+                  title="Rename"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 7, color: "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-selected)";
+                    e.currentTarget.style.color = "var(--accent)";
+                    e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = "var(--text-muted)";
+                    e.currentTarget.style.borderColor = "var(--border)";
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleDeleteClick}
+                  title="Delete"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 7, color: "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "rgba(239,68,68,0.08)";
+                    e.currentTarget.style.color = "#ef4444";
+                    e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = "var(--text-muted)";
+                    e.currentTarget.style.borderColor = "var(--border)";
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
