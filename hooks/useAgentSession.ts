@@ -6,6 +6,8 @@ import type {
   ExtensionStatusItem,
   ExtensionUiRequest,
   ExtensionWidgetItem,
+  OpenAIFastModeConfigState,
+  OpenAIFastModeState,
   SessionInfo,
   SessionTreeNode,
 } from "@/lib/types";
@@ -84,6 +86,8 @@ interface ForkCandidatesResponse {
 type OpenAIFastToggleResponse = {
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
+  openAIFastMode?: OpenAIFastModeState;
+  openAIFastConfig?: OpenAIFastModeConfigState;
 };
 
 type AgentStateResponse = {
@@ -96,6 +100,8 @@ type AgentStateResponse = {
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
+  openAIFastMode?: OpenAIFastModeState;
+  openAIFastConfig?: OpenAIFastModeConfigState;
 };
 
 type ContextUsageInfo = NonNullable<AgentStateResponse["contextUsage"]>;
@@ -113,6 +119,51 @@ export interface QueuedMessages {
 
 function normalizeQueuedMessages(q?: { steering?: string[]; followUp?: string[] } | null): QueuedMessages {
   return { steering: q?.steering ?? [], followUp: q?.followUp ?? [] };
+}
+
+const DEFAULT_OPENAI_FAST_CONFIG: OpenAIFastModeConfigState = {
+  enabled: false,
+  models: ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.5"],
+};
+
+function normalizeOpenAIFastModelRef(ref: string): string {
+  return ref.trim().toLowerCase();
+}
+
+function isOpenAIFastEligible(model: SelectedModel | null, config: OpenAIFastModeConfigState): boolean {
+  if (!model) return false;
+  if (model.provider !== "openai" && model.provider !== "openai-codex") return false;
+  const bare = normalizeOpenAIFastModelRef(model.modelId);
+  const full = normalizeOpenAIFastModelRef(`${model.provider}/${model.modelId}`);
+  return config.models.some((entry) => {
+    const normalized = normalizeOpenAIFastModelRef(entry);
+    return normalized === bare || normalized === full;
+  });
+}
+
+function deriveOpenAIFastModeState(
+  model: SelectedModel | null,
+  config: OpenAIFastModeConfigState
+): OpenAIFastModeState | null {
+  if (!model) return null;
+  const eligible = isOpenAIFastEligible(model, config);
+  const active = config.enabled && eligible;
+  const status = !eligible ? "unavailable" : active ? "fast" : "normal";
+  return {
+    enabled: config.enabled,
+    eligible,
+    active,
+    status,
+    statusText: status === "fast" ? "Fast" : status === "normal" ? "Normal" : "Fast N/A",
+    model,
+  };
+}
+
+function sameSelectedModel(
+  a: { provider: string; modelId: string } | null | undefined,
+  b: { provider: string; modelId: string } | null | undefined
+): boolean {
+  return !!a && !!b && a.provider === b.provider && a.modelId === b.modelId;
 }
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
@@ -370,6 +421,7 @@ type ModelsResponse = {
   defaultThinkingLevel?: ThinkingLevelOption;
   thinkingLevels?: Record<string, string[]>;
   thinkingLevelMaps?: Record<string, Record<string, string | null>>;
+  openAIFastConfig?: OpenAIFastModeConfigState;
 };
 
 type SlashCommandsResponse = {
@@ -490,6 +542,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  const [openAIFastConfig, setOpenAIFastConfig] = useState<OpenAIFastModeConfigState>(DEFAULT_OPENAI_FAST_CONFIG);
+  const [openAIFastModeState, setOpenAIFastModeState] = useState<OpenAIFastModeState | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -515,6 +569,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  const derivedOpenAIFastMode = deriveOpenAIFastModeState(displayModel, openAIFastConfig);
+  const openAIFastMode = openAIFastModeState && sameSelectedModel(openAIFastModeState.model, displayModel)
+    ? openAIFastModeState
+    : derivedOpenAIFastMode;
 
   const applyContextUsage = useCallback((usage: AgentStateResponse["contextUsage"]) => {
     const nextUsage = usage ?? null;
@@ -524,6 +582,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const applyContextUsageFromState = useCallback((state?: AgentStateResponse | null) => {
     if (state?.contextUsage !== undefined) applyContextUsage(state.contextUsage);
   }, [applyContextUsage]);
+
+  const applyOpenAIFastFromState = useCallback((state?: AgentStateResponse | null) => {
+    if (state?.openAIFastConfig !== undefined) setOpenAIFastConfig(state.openAIFastConfig ?? DEFAULT_OPENAI_FAST_CONFIG);
+    if (state?.openAIFastMode !== undefined) setOpenAIFastModeState(state.openAIFastMode ?? null);
+  }, []);
 
   const sessionStats = (() => {
     if (sessionStatsOverride) return sessionStatsOverride;
@@ -591,6 +654,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const liveState = d.agentState?.state;
       if (liveState) {
         applyContextUsageFromState(liveState);
+        applyOpenAIFastFromState(liveState);
         if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
         if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
         if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
@@ -609,7 +673,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [applyContextUsageFromState]);
+  }, [applyContextUsageFromState, applyOpenAIFastFromState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -886,7 +950,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // must not overwrite the messages of the run currently streaming.
     if (runId !== undefined && promptRunIdRef.current !== runId) return;
     try {
-      if (sid) await loadSession(sid);
+      if (sid) await loadSession(sid, false, true);
     } finally {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       optimisticUserMessageKeyRef.current = null;
@@ -913,6 +977,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
           const state = data.state;
           applyContextUsageFromState(state);
+          applyOpenAIFastFromState(state);
           if (!data.running || !state || (!state.isStreaming && !state.isPromptRunning)) {
             await finishPromptWithoutStream(sid, runId);
             return;
@@ -923,7 +988,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       await delay(PROMPT_SETTLE_POLL_MS);
     }
-  }, [applyContextUsageFromState, finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
 
   const fetchLiveContextUsage = useCallback(async (runId: number) => {
     const sid = sessionIdRef.current;
@@ -937,12 +1002,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const data = await res.json() as { state?: AgentStateResponse };
       if (promptRunIdRef.current !== runId || !agentRunningRef.current) return;
       applyContextUsageFromState(data.state);
+      applyOpenAIFastFromState(data.state);
     } catch {
       // Best-effort live refresh; final/reconcile paths remain authoritative.
     } finally {
       liveContextUsageRefreshInFlightRef.current = false;
     }
-  }, [applyContextUsageFromState]);
+  }, [applyContextUsageFromState, applyOpenAIFastFromState]);
 
   const requestLiveContextUsageRefresh = useCallback((options: { immediate?: boolean } = {}) => {
     if (!agentRunningRef.current) return;
@@ -1000,7 +1066,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // (wrapper destroyed) means nothing is compacting.
       setIsCompacting(state?.isCompacting ?? false);
       setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
-      if (state) applyContextUsageFromState(state);
+      if (state) {
+        applyContextUsageFromState(state);
+        applyOpenAIFastFromState(state);
+      }
       const busy = data.running && state
         && (state.isStreaming || state.isPromptRunning || state.isCompacting);
       if (busy || !agentRunningRef.current) return;
@@ -1013,7 +1082,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
-  }, [applyContextUsageFromState, finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1068,6 +1137,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .then((r) => r.json())
             .then((d: { state?: AgentStateResponse }) => {
               applyContextUsageFromState(d.state);
+              applyOpenAIFastFromState(d.state);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
@@ -1200,7 +1270,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyContextUsageFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
+  }, [addNotice, applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1384,16 +1454,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const result = await sendAgentCommand<OpenAIFastToggleResponse>(sid, { type: "toggle_openai_fast" });
       if (result?.extensionStatuses) setExtensionStatuses(result.extensionStatuses);
       if (result?.extensionWidgets) setExtensionWidgets(result.extensionWidgets);
-
-      const statusText = result?.extensionStatuses
-        ?.find((status) => status.key === "openai-fast")
-        ?.text.toLowerCase();
-      addNotice({
-        type: "info",
-        message: statusText?.includes("fast")
-          ? "OpenAI Fast mode enabled"
-          : "OpenAI Fast mode disabled",
-      });
+      if (result?.openAIFastConfig) setOpenAIFastConfig(result.openAIFastConfig);
+      if (result?.openAIFastMode) setOpenAIFastModeState(result.openAIFastMode);
     } catch (e) {
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
     }
@@ -1426,6 +1488,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelNames(d.models);
     setModelThinkingLevels(d.thinkingLevels ?? {});
     setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
+    setOpenAIFastConfig(d.openAIFastConfig ?? DEFAULT_OPENAI_FAST_CONFIG);
+    setOpenAIFastModeState(null);
     const nextModelList = d.modelList ?? [];
     setModelList(nextModelList);
     if (isNew) {
@@ -1780,6 +1844,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           applyContextUsageFromState(agentState.state);
+          applyOpenAIFastFromState(agentState.state);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
@@ -1893,7 +1958,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
-    isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
+    isCompacting, compactError, compactResult, currentModel, displayModel, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize,
     isAutoModelSelection: isNew && newSessionModel === null,

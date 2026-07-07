@@ -1,6 +1,7 @@
 import { stat } from "fs/promises";
 import { createAgentSessionServices, getAgentDir, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { loadPiCodexFastModeConfig } from "@/lib/pi-codex-fast";
 
 export const dynamic = "force-dynamic";
 
@@ -83,5 +84,13 @@ export async function GET(req: Request) {
     }
   } catch { /* return empty */ }
 
-  return Response.json({ models: Object.fromEntries(nameMap), modelList, defaultModel, defaultThinkingLevel, thinkingLevels, thinkingLevelMaps });
+  return Response.json({
+    models: Object.fromEntries(nameMap),
+    modelList,
+    defaultModel,
+    defaultThinkingLevel,
+    thinkingLevels,
+    thinkingLevelMaps,
+    openAIFastConfig: loadPiCodexFastModeConfig(),
+  });
 }

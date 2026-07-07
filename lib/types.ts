@@ -192,6 +192,22 @@ export interface ExtensionWidgetItem {
   placement: "aboveEditor" | "belowEditor";
 }
 
+export type OpenAIFastModeStatus = "fast" | "normal" | "unavailable";
+
+export interface OpenAIFastModeConfigState {
+  enabled: boolean;
+  models: string[];
+}
+
+export interface OpenAIFastModeState {
+  enabled: boolean;
+  eligible: boolean;
+  active: boolean;
+  status: OpenAIFastModeStatus;
+  statusText: string;
+  model: { provider: string; modelId: string } | null;
+}
+
 export interface SessionMessageEntry extends SessionEntryBase {
   type: "message";
   message: AgentMessage;

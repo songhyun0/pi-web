@@ -9,6 +9,7 @@ import {
   listAllSessions,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { getPiCodexFastModeState, loadPiCodexFastModeConfig } from "@/lib/pi-codex-fast";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -158,7 +159,16 @@ export async function GET(
         const state = await rpc.send({ type: "get_state" });
         agentState = { running: true, state };
       } else {
-        agentState = { running: false };
+        agentState = {
+          running: false,
+          state: {
+            extensionStatuses: [],
+            extensionWidgets: [],
+            queuedMessages: { steering: [], followUp: [] },
+            openAIFastMode: getPiCodexFastModeState(context.model),
+            openAIFastConfig: loadPiCodexFastModeConfig(),
+          },
+        };
       }
     }
 

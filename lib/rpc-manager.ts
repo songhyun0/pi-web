@@ -7,6 +7,7 @@ import { ExtensionUiBridge } from "./extension-ui-bridge";
 import type { SlashCommandInfo } from "./slash-command-registry";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse } from "./types";
+import { getPiCodexFastModeState, loadPiCodexFastModeConfig, PI_CODEX_FAST_COMMAND_NAME, PI_CODEX_FAST_PACKAGE_NAME } from "./pi-codex-fast";
 
 // ============================================================================
 // Types
@@ -249,6 +250,12 @@ export class AgentSessionWrapper {
     }
   }
 
+  private hasOpenAIFastCommand(): boolean {
+    return this.inner.extensionRunner
+      .getRegisteredCommands()
+      .some((registered) => registered.invocationName === PI_CODEX_FAST_COMMAND_NAME);
+  }
+
   async send(command: Record<string, unknown>): Promise<unknown> {
     this.resetIdleTimer();
     const type = command.type as string;
@@ -257,27 +264,30 @@ export class AgentSessionWrapper {
     switch (type) {
       case "prompt": {
         // Fire and forget — events come via subscribe
+        const message = command.message as string;
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
         this.promptRunning = true;
         notifyRunningChange();
-        this.inner.prompt(command.message as string, {
+        this.inner.prompt(message, {
           ...(promptImages?.length ? { images: promptImages } : {}),
           ...(streamingBehavior ? { streamingBehavior } : {}),
           source: "rpc",
-        }).then(() => {
-          this.promptRunning = false;
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
-        }).catch((error) => {
-          this.promptRunning = false;
-          this.emit({
-            type: "prompt_error",
-            errorMessage: error instanceof Error ? error.message : String(error),
+        })
+          .then(() => {
+            this.promptRunning = false;
+            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            notifyRunningChange();
+          })
+          .catch((error) => {
+            this.promptRunning = false;
+            this.emit({
+              type: "prompt_error",
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
+            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            notifyRunningChange();
           });
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
-        });
         return null;
       }
 
@@ -310,6 +320,8 @@ export class AgentSessionWrapper {
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
           extensionStatuses: this.extensionUi.getStatuses(),
           extensionWidgets: this.extensionUi.getWidgets(),
+          openAIFastMode: getPiCodexFastModeState(this.inner.model),
+          openAIFastConfig: loadPiCodexFastModeConfig(),
         };
       }
 
@@ -521,15 +533,21 @@ export class AgentSessionWrapper {
 
       case "toggle_openai_fast": {
         await this.waitForExtensionsBound();
-        const hasFastCommand = this.inner.extensionRunner
-          .getRegisteredCommands()
-          .some((registered) => registered.invocationName === "fast");
-        if (!hasFastCommand) throw new Error("OpenAI Fast extension is not available in this session. Install or reload the openai-fast plugin.");
+        if (!this.hasOpenAIFastCommand()) {
+          throw new Error(`OpenAI Fast mode is not available in this session. Install or reload the ${PI_CODEX_FAST_PACKAGE_NAME} plugin.`);
+        }
 
-        await this.inner.prompt("/fast", { source: "rpc" });
+        const currentFastMode = getPiCodexFastModeState(this.inner.model);
+        if (!currentFastMode.eligible) {
+          throw new Error("OpenAI Fast mode is unavailable for the current model.");
+        }
+
+        await this.inner.prompt(`/fast ${currentFastMode.active ? "off" : "on"}`, { source: "rpc" });
         return {
           extensionStatuses: this.extensionUi.getStatuses(),
           extensionWidgets: this.extensionUi.getWidgets(),
+          openAIFastMode: getPiCodexFastModeState(this.inner.model),
+          openAIFastConfig: loadPiCodexFastModeConfig(),
         };
       }
 
