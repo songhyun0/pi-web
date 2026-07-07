@@ -11,6 +11,7 @@ import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
+import { SettingsModal } from "./SettingsModal";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -18,6 +19,7 @@ import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
 import type { SlashUiAction } from "@/lib/slash-command-registry";
+import { DEFAULT_APP_SETTINGS, type AppSettings } from "@/lib/app-settings";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -80,6 +82,8 @@ export function AppShell() {
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
@@ -94,6 +98,27 @@ export function AppShell() {
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/app-settings", { cache: "no-store" })
+      .then(async (res) => {
+        const data = await res.json() as AppSettings;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return data;
+      })
+      .then((data) => {
+        if (!cancelled) setAppSettings(data);
+      })
+      .catch(() => {
+        // Keep the built-in default if settings cannot be loaded.
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    document.title = appSettings.displayName;
+  }, [appSettings.displayName]);
 
   useEffect(() => {
     setSidebarWidth(readStoredWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
@@ -520,6 +545,7 @@ export function AppShell() {
   const sidebarContent = (
     <>
       <SessionSidebar
+        appName={appSettings.displayName}
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
@@ -574,15 +600,28 @@ export function AppShell() {
               </svg>
             ),
           },
+          {
+            label: "Settings",
+            onClick: () => setSettingsOpen(true),
+            disabled: false,
+            icon: (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <title>Settings</title>
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            ),
+          },
         ] as { label: string; onClick: () => void; disabled: boolean; icon: React.ReactNode }[]).map(({ label, onClick, disabled, icon }) => (
           <button
+            type="button"
             key={label}
             onClick={onClick}
             disabled={disabled}
             title={label}
             style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              height: 32, padding: 0, background: "none", border: "none",
+              flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+              height: 32, padding: "0 2px", background: "none", border: "none",
               borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
               fontSize: 12, opacity: disabled ? 0.35 : 1,
               transition: "background 0.12s, color 0.12s",
@@ -591,7 +630,7 @@ export function AppShell() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
             {icon}
-            {label}
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
           </button>
         ))}
       </div>
@@ -1209,6 +1248,7 @@ export function AppShell() {
           {showChat ? (
             <ChatWindow
               key={sessionKey}
+              appName={appSettings.displayName}
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
               onAgentEnd={handleAgentEnd}
@@ -1402,6 +1442,13 @@ export function AppShell() {
       </svg>
     </button>
     {modelsConfigOpen && <ModelsConfig onClose={() => { setModelsConfigOpen(false); setModelsRefreshKey((k) => k + 1); }} />}
+    {settingsOpen && (
+      <SettingsModal
+        settings={appSettings}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(next) => setAppSettings(next)}
+      />
+    )}
     {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
       <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
     )}

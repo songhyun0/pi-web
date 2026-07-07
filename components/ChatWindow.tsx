@@ -1,21 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentMessage, AssistantContentBlock, AssistantMessage, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
-import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
-import { MessageView } from "./MessageView";
-import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
-import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
-import { ExtensionUiHost, ExtensionUiInline } from "./ExtensionUiHost";
-import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
-import type { SlashUiAction } from "@/lib/slash-command-registry";
+import { type AgentPhase, type NoticeItem, useAgentSession } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
+import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SlashUiAction } from "@/lib/slash-command-registry";
+import type { AgentMessage, AssistantContentBlock, AssistantMessage, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
+import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { ExtensionUiHost, ExtensionUiInline } from "./ExtensionUiHost";
+import { MessageView } from "./MessageView";
+import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
 
 interface Props {
+  appName?: string;
   session: SessionInfo | null;
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
@@ -136,7 +138,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onSlashUiAction, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onSlashUiAction, onContextUsageChange, onOpenFile }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -181,7 +183,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
-    isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
+    isCompacting, compactError, compactResult, displayModel: displayModelValue, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize,
     isAutoModelSelection,
@@ -258,11 +260,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
-  const openAIFastStatus = extensionStatuses.find((status) => status.key === "openai-fast")?.text ?? null;
-  const openAIFastEligible = displayModelValue
-    ? displayModelValue.provider === "openai-codex" && ["gpt-5.4", "gpt-5.5"].includes(displayModelValue.modelId)
-    : undefined;
-  const showOpenAIFastToggle = openAIFastEligible || openAIFastStatus !== null;
+  const openAIFastStatus = openAIFastMode?.statusText ?? null;
+  const openAIFastEligible = openAIFastMode?.eligible;
+  const showOpenAIFastToggle = !!openAIFastMode
+    && (openAIFastMode.eligible || displayModelValue?.provider === "openai" || displayModelValue?.provider === "openai-codex");
 
   useEffect(() => {
     if (!treeSelectorOpen) return;
@@ -454,7 +455,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             >
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flex: 1, lineHeight: 1.4, overflow: "hidden" }}>
                 <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: 0, color: "var(--text)", flexShrink: 0, whiteSpace: "nowrap" }}>π</span>
-                <span style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, letterSpacing: 0, flexShrink: 0, whiteSpace: "nowrap" }}>Pi Agent Web</span>
+                <span title={appName} style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, letterSpacing: 0, flexShrink: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{appName}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
