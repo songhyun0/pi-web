@@ -66,6 +66,7 @@ type ThemeLike = {
   dim: (text: string) => string;
   italic: (text: string) => string;
   underline: (text: string) => string;
+  strikethrough: (text: string) => string;
 };
 
 const DEFAULT_CUSTOM_COLUMNS = 92;
@@ -104,6 +105,7 @@ function createCompatTheme(): ThemeLike {
     dim: (text) => sgr([2], text),
     italic: (text) => sgr([3], text),
     underline: (text) => sgr([4], text),
+    strikethrough: (text) => sgr([9], text),
   };
 }
 

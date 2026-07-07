@@ -131,6 +131,20 @@ export function ansi256Color(index: number): string | undefined {
   return undefined;
 }
 
+function addTextDecoration(style: CSSProperties, decoration: string): void {
+  const decorations = new Set(String(style.textDecoration ?? "").split(/\s+/).filter(Boolean));
+  decorations.delete("none");
+  decorations.add(decoration);
+  style.textDecoration = Array.from(decorations).join(" ");
+}
+
+function removeTextDecoration(style: CSSProperties, decoration: string): void {
+  const decorations = new Set(String(style.textDecoration ?? "").split(/\s+/).filter(Boolean));
+  decorations.delete(decoration);
+  if (decorations.size === 0) delete style.textDecoration;
+  else style.textDecoration = Array.from(decorations).join(" ");
+}
+
 function applyAnsiCodes(style: CSSProperties, codes: number[]): CSSProperties {
   const next: CSSProperties = { ...style };
   for (let i = 0; i < codes.length; i++) {
@@ -144,14 +158,18 @@ function applyAnsiCodes(style: CSSProperties, codes: number[]): CSSProperties {
     } else if (code === 3) {
       next.fontStyle = "italic";
     } else if (code === 4) {
-      next.textDecoration = "underline";
+      addTextDecoration(next, "underline");
+    } else if (code === 9) {
+      addTextDecoration(next, "line-through");
     } else if (code === 22) {
       delete next.fontWeight;
       delete next.opacity;
     } else if (code === 23) {
       delete next.fontStyle;
     } else if (code === 24) {
-      delete next.textDecoration;
+      removeTextDecoration(next, "underline");
+    } else if (code === 29) {
+      removeTextDecoration(next, "line-through");
     } else if (code === 39) {
       delete next.color;
     } else if (code === 49) {

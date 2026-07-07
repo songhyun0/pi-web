@@ -82,6 +82,7 @@ Provide a small ANSI-producing theme object with common methods used by Pi TUI p
 - `dim(text)`
 - `italic(text)`
 - `underline(text)`
+- `strikethrough(text)`
 
 The browser already renders ANSI SGR sequences for custom panels; widget rendering will use the same presentation path.
 
