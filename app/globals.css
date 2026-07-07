@@ -627,7 +627,7 @@ span.linenumber {
   }
   .sidebar-container {
     position: fixed !important;
-    top: 0;
+    top: env(safe-area-inset-top);
     left: 0;
     bottom: 0;
     width: 280px;
