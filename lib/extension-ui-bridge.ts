@@ -308,7 +308,9 @@ export class ExtensionUiBridge {
   }
 
   getWidgets(): ExtensionWidgetItem[] {
-    return Array.from(this.extensionWidgets.values()).map((widget) => this.renderWidget(widget));
+    return Array.from(this.extensionWidgets.values())
+      .map((widget) => this.renderWidget(widget))
+      .filter((widget) => widget.lines.length > 0);
   }
 
   getPendingRequests(): ExtensionUiAgentEvent[] {
@@ -555,7 +557,9 @@ export class ExtensionUiBridge {
       id: randomUUID(),
       method: "setWidget",
       widgetKey: key,
-      widgetLines: lines,
+      // Keep the server-side widget/component registered, but project an
+      // empty render as a clear event so the browser does not show an empty card.
+      widgetLines: lines && lines.length > 0 ? lines : undefined,
       widgetPlacement: placement,
     } as ExtensionUiRequest as ExtensionUiAgentEvent);
   }
