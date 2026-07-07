@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
+import { readAppSettings } from "@/lib/app-settings-store";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 
@@ -9,25 +10,31 @@ const notoSansMono = Noto_Sans_Mono({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: "Pi Agent Web",
-  description: "Pi Coding Agent Web Interface",
-  applicationName: "Pi Agent Web",
-  manifest: "/manifest.webmanifest",
-  appleWebApp: {
-    capable: true,
-    title: "Pi Agent",
-    statusBarStyle: "black-translucent",
-  },
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
-  },
-};
+export const dynamic = "force-dynamic";
+
+export function generateMetadata(): Metadata {
+  const displayName = readAppSettings().displayName;
+
+  return {
+    title: displayName,
+    description: "Pi Coding Agent Web Interface",
+    applicationName: displayName,
+    manifest: "/api/app-settings/manifest",
+    appleWebApp: {
+      capable: true,
+      title: displayName,
+      statusBarStyle: "black-translucent",
+    },
+    icons: {
+      icon: [
+        { url: "/favicon.ico", sizes: "any" },
+        { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+        { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
