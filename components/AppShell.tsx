@@ -764,7 +764,7 @@ export function AppShell() {
         style={{
           position: "fixed",
           inset: 0,
-          zIndex: 199,
+          zIndex: isMobile ? 899 : 199,
           background: "rgba(0,0,0,0.4)",
           opacity: sidebarOpen ? 1 : 0,
           pointerEvents: sidebarOpen ? "auto" : "none",
@@ -782,7 +782,7 @@ export function AppShell() {
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
-          zIndex: 200,
+          zIndex: isMobile ? 900 : 200,
         } as CSSProperties}
       >
         {sidebarContent}
