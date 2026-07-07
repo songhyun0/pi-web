@@ -216,6 +216,11 @@ export function AppShell() {
     setSidebarOpen((open) => !open);
   }, [isMobile]);
 
+  const handleSidebarClose = useCallback(() => {
+    setActiveTopPanel(null);
+    setSidebarOpen(false);
+  }, []);
+
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (isMobile || !sidebarOpen) return;
     event.preventDefault();
@@ -558,6 +563,7 @@ export function AppShell() {
         onOpenFile={handleOpenFile}
         explorerRefreshKey={explorerRefreshKey}
         onAtMention={handleAtMention}
+        onRequestClose={isMobile ? handleSidebarClose : undefined}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
@@ -754,7 +760,7 @@ export function AppShell() {
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
-        onClick={() => setSidebarOpen(false)}
+        onClick={handleSidebarClose}
         style={{
           position: "fixed",
           inset: 0,

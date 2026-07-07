@@ -20,6 +20,7 @@ interface Props {
   onOpenFile?: (filePath: string, fileName: string) => void;
   explorerRefreshKey?: number;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
+  onRequestClose?: () => void;
 }
 
 interface WorktreeEntry {
@@ -347,7 +348,22 @@ function PiAgentTitle({ appName }: { appName: string }) {
   );
 }
 
-export function SessionSidebar({ appName = DEFAULT_APP_DISPLAY_NAME, selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention }: Props) {
+export function SessionSidebar({
+  appName = DEFAULT_APP_DISPLAY_NAME,
+  selectedSessionId,
+  onSelectSession,
+  onNewSession,
+  initialSessionId,
+  onInitialRestoreDone,
+  refreshKey,
+  onSessionDeleted,
+  selectedCwd: selectedCwdProp,
+  onCwdChange,
+  onOpenFile,
+  explorerRefreshKey,
+  onAtMention,
+  onRequestClose,
+}: Props) {
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -892,6 +908,41 @@ export function SessionSidebar({ appName = DEFAULT_APP_DISPLAY_NAME, selectedSes
                 </svg>
               )}
             </button>
+            {onRequestClose && (
+              <button
+                type="button"
+                onClick={onRequestClose}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  width: 32, height: 32,
+                  borderRadius: 7,
+                  padding: 0,
+                  flexShrink: 0,
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-selected)";
+                  e.currentTarget.style.color = "var(--accent)";
+                  e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text-muted)";
+                  e.currentTarget.style.borderColor = "var(--border)";
+                }}
+                title="Close sidebar"
+                aria-label="Close sidebar"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
