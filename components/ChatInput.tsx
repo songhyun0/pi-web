@@ -10,6 +10,7 @@ import {
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { readSafeAreaInsetPx } from "@/lib/safe-area";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -75,6 +76,11 @@ export interface ChatInputHandle {
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
+const AUTOCOMPLETE_MENU_GAP_PX = 8;
+const AUTOCOMPLETE_MENU_MAX_HEIGHT_PX = 460;
+const AUTOCOMPLETE_MENU_MIN_HEIGHT_PX = 96;
+const MOBILE_AUTOCOMPLETE_TOP_GUARD_PX = 44; // 36px top bar + breathing room
+const DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX = 8;
 const MODEL_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function compareModelOptions(a: ModelOption, b: ModelOption): number {
@@ -128,6 +134,21 @@ function slashMatchRank(command: SlashCommandPaletteItem, query: string): number
   if (name.includes(query)) return 2;
   if (description.includes(query)) return 3;
   return 4;
+}
+function computeAutocompleteMenuMaxHeight(anchor: HTMLElement | null, isMobile: boolean): number {
+  if (typeof window === "undefined" || !anchor) return AUTOCOMPLETE_MENU_MAX_HEIGHT_PX;
+
+  const rect = anchor.getBoundingClientRect();
+  const visualViewport = window.visualViewport;
+  const viewportTop = visualViewport?.offsetTop ?? 0;
+  const viewportHeight = visualViewport?.height ?? window.innerHeight;
+  const safeTop = readSafeAreaInsetPx("top");
+  const topGuard = viewportTop + (isMobile ? safeTop + MOBILE_AUTOCOMPLETE_TOP_GUARD_PX : DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX);
+  const availableAbove = rect.top - topGuard - AUTOCOMPLETE_MENU_GAP_PX;
+  const viewportCap = viewportHeight * (isMobile ? 0.62 : 0.56);
+  const measuredMax = Math.min(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX, viewportCap, availableAbove);
+
+  return Math.max(AUTOCOMPLETE_MENU_MIN_HEIGHT_PX, Math.floor(Number.isFinite(measuredMax) ? measuredMax : AUTOCOMPLETE_MENU_MAX_HEIGHT_PX));
 }
 
 function imageToDraftImage(image: AttachedImage): ChatDraftImage {
@@ -211,8 +232,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
+  const [autocompleteMenuMaxHeight, setAutocompleteMenuMaxHeight] = useState(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autocompleteAnchorRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownPanelRef = useRef<HTMLDivElement>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
@@ -883,9 +906,37 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   useEffect(() => {
+    if (!slashMenuOpen && !atMenuOpen) return;
+
+    let frame = 0;
+    const updateAutocompleteHeight = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        setAutocompleteMenuMaxHeight(computeAutocompleteMenuMaxHeight(autocompleteAnchorRef.current, isMobile));
+      });
+    };
+
+    updateAutocompleteHeight();
+    window.addEventListener("resize", updateAutocompleteHeight);
+    window.visualViewport?.addEventListener("resize", updateAutocompleteHeight);
+    window.visualViewport?.addEventListener("scroll", updateAutocompleteHeight);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateAutocompleteHeight);
+      window.visualViewport?.removeEventListener("resize", updateAutocompleteHeight);
+      window.visualViewport?.removeEventListener("scroll", updateAutocompleteHeight);
+    };
+  }, [slashMenuOpen, atMenuOpen, isMobile, value, attachedImages.length, filteredSlashCommands.length, atMatches.length, slashCommandsLoading, fileIndexLoading]);
+
+  useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
+  const slashMenuMaxHeight = Math.min(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX, autocompleteMenuMaxHeight);
+  const slashMenuBodyMaxHeight = Math.max(48, slashMenuMaxHeight - 34);
+  const atMenuMaxHeight = Math.min(400, autocompleteMenuMaxHeight);
+  const atMenuBodyMaxHeight = Math.max(48, atMenuMaxHeight - 34);
 
 
   return (
@@ -893,7 +944,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       style={{
         flexShrink: 0,
         background: "transparent",
-        padding: "0 16px 8px",
+        padding: isMobile ? "0 16px calc(8px + var(--pi-safe-area-bottom))" : "0 16px 8px",
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
       }}
     >
@@ -1039,7 +1090,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         )}
 
         {/* Main input */}
-        <div style={{ position: "relative" }}>
+        <div ref={autocompleteAnchorRef} style={{ position: "relative" }}>
           {slashMenuOpen && slashQuery !== null && (
             <div
               style={{
@@ -1053,7 +1104,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 borderRadius: 8,
                 boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
                 overflow: "hidden",
-                maxHeight: "min(56vh, 460px)",
+                maxHeight: slashMenuMaxHeight,
               }}
             >
               <div
@@ -1071,7 +1122,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <span>{slashCommandsLoading ? "Loading commands..." : `Slash commands · ${slashCommandCountLabel}`}</span>
                 <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
               </div>
-              <div style={{ maxHeight: "calc(min(56vh, 460px) - 34px)", overflowY: "auto", padding: 10 }}>
+              <div style={{ maxHeight: slashMenuBodyMaxHeight, overflowY: "auto", padding: 10 }}>
                 {!slashCommandsLoading && filteredSlashCommands.length === 0 ? (
                   <div style={{ padding: "2px 2px 4px", fontSize: 12, color: "var(--text-dim)" }}>
                     No slash commands found
@@ -1190,7 +1241,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   borderRadius: 8,
                   boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
                   overflow: "hidden",
-                  maxHeight: "min(48vh, 400px)",
+                  maxHeight: atMenuMaxHeight,
                 }}
               >
                 <div
@@ -1212,7 +1263,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   </span>
                   <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
                 </div>
-                <div style={{ maxHeight: "calc(min(48vh, 400px) - 34px)", overflowY: "auto", padding: 4 }}>
+                <div style={{ maxHeight: atMenuBodyMaxHeight, overflowY: "auto", padding: 4 }}>
                   {!indexLoading && atMatches.length === 0 ? (
                     <div style={{ padding: "6px 8px", fontSize: 12, color: "var(--text-dim)" }}>
                       {needsServerSearch && !serverResultInUse ? "Searching…" : "No matching files"}
@@ -1497,9 +1548,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{currentName}</span>
                   </button>
                   {modelDropdownOpen && modelDropdownRect && (() => {
-                    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+                    const visualViewport = window.visualViewport;
+                    const viewportTop = visualViewport?.offsetTop ?? 0;
+                    const viewportHeight = visualViewport?.height ?? window.innerHeight;
+                    const topGuard = viewportTop + (isMobile ? readSafeAreaInsetPx("top") + MOBILE_AUTOCOMPLETE_TOP_GUARD_PX : DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX);
                     const bottom = viewportHeight - modelDropdownRect.top + 6;
-                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
+                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - topGuard - 6, viewportHeight * 0.6));
                     // On mobile, pin to a small left margin and cap width to the
                     // viewport so long model names never push the panel off-screen.
                     const panelPos: React.CSSProperties = isMobile

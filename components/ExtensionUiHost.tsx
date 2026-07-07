@@ -148,6 +148,7 @@ function ExtensionDialog({
         justifyContent: "center",
         padding: 20,
         background: "rgba(0,0,0,0.18)",
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -155,6 +156,7 @@ function ExtensionDialog({
         aria-modal="true"
         style={{
           width: "min(560px, 100%)",
+          maxHeight: "calc(100% - 40px)",
           border: "1px solid var(--border)",
           borderRadius: 8,
           background: "var(--bg)",
@@ -412,6 +414,7 @@ function ExtensionCustomPanel({
         justifyContent: "center",
         padding: 20,
         background: "rgba(0,0,0,0.18)",
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -422,7 +425,9 @@ function ExtensionCustomPanel({
         onMouseDown={() => focusInput()}
         style={{
           width: "min(920px, 100%)",
-          maxHeight: "min(760px, calc(100vh - 40px))",
+          maxHeight: "min(760px, calc(100% - 40px))",
+          display: "flex",
+          flexDirection: "column",
           border: "1px solid var(--border)",
           borderRadius: 8,
           background: "var(--bg)",
@@ -505,7 +510,8 @@ function ExtensionCustomPanel({
           style={{
             margin: 0,
             padding: 14,
-            maxHeight: "calc(min(760px, 100vh - 40px) - 48px)",
+            flex: 1,
+            minHeight: 0,
             overflow: "auto",
             background: "var(--bg-panel)",
             color: "var(--text)",

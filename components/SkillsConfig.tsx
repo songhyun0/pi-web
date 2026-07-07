@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SkillSearchResult } from "@/lib/api-types";
+import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_MAX_WIDTH, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
 
 interface Skill {
   name: string;
@@ -593,6 +594,8 @@ export function SkillsConfig({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        padding: SAFE_AREA_MODAL_PADDING,
+        boxSizing: "border-box",
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -600,10 +603,10 @@ export function SkillsConfig({
     >
       <div
         style={{
-          width: isMobile ? "calc(100vw - 16px)" : 860,
-          maxWidth: "calc(100vw - 16px)",
-          height: isMobile ? "calc(100dvh - 16px)" : "78vh",
-          maxHeight: "calc(100dvh - 16px)",
+          width: isMobile ? "100%" : 860,
+          maxWidth: isMobile ? "100%" : SAFE_AREA_MODAL_MAX_WIDTH,
+          height: isMobile ? "100%" : "78vh",
+          maxHeight: SAFE_AREA_MODAL_MAX_HEIGHT,
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 10,

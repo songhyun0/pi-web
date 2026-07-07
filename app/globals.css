@@ -19,6 +19,10 @@
 }
 
 :root {
+  --pi-safe-area-top: env(safe-area-inset-top, 0px);
+  --pi-safe-area-right: env(safe-area-inset-right, 0px);
+  --pi-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --pi-safe-area-left: env(safe-area-inset-left, 0px);
   --bg: #ffffff;
   --bg-panel: #f5f5f5;
   --bg-hover: #eeeeee;
@@ -627,7 +631,7 @@ span.linenumber {
   }
   .sidebar-container {
     position: fixed !important;
-    top: env(safe-area-inset-top);
+    top: var(--pi-safe-area-top);
     left: 0;
     right: 0;
     bottom: 0;

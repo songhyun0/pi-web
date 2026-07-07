@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
 
 interface DirectoryEntry {
   name: string;
@@ -122,8 +123,9 @@ export function DirectoryPickerModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 20,
+        padding: SAFE_AREA_MODAL_PADDING,
         background: "rgba(0,0,0,0.18)",
+        boxSizing: "border-box",
       }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -143,7 +145,7 @@ export function DirectoryPickerModal({
         }}
         style={{
           width: "min(760px, 100%)",
-          maxHeight: "min(720px, calc(100vh - 40px))",
+          maxHeight: `min(720px, ${SAFE_AREA_MODAL_MAX_HEIGHT})`,
           display: "flex",
           flexDirection: "column",
           border: "1px solid var(--border)",

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { PluginPackageInfo, PluginsResponse } from "@/lib/api-types";
+import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_MAX_WIDTH, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
 
 type PluginScope = PluginPackageInfo["scope"];
 type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
@@ -701,6 +702,8 @@ export function PluginsConfig({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        padding: SAFE_AREA_MODAL_PADDING,
+        boxSizing: "border-box",
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -708,10 +711,10 @@ export function PluginsConfig({
     >
       <div
         style={{
-          width: isMobile ? "calc(100vw - 16px)" : 860,
-          maxWidth: "calc(100vw - 16px)",
-          height: isMobile ? "calc(100dvh - 16px)" : "76vh",
-          maxHeight: "calc(100dvh - 16px)",
+          width: isMobile ? "100%" : 860,
+          maxWidth: isMobile ? "100%" : SAFE_AREA_MODAL_MAX_WIDTH,
+          height: isMobile ? "100%" : "76vh",
+          maxHeight: SAFE_AREA_MODAL_MAX_HEIGHT,
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 8,

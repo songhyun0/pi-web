@@ -743,7 +743,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ position: "relative", display: "flex", height: "100dvh", paddingTop: "env(safe-area-inset-top)", overflow: "hidden", background: "var(--bg)" }}>
+    <div style={{ position: "relative", display: "flex", height: "100dvh", paddingTop: "var(--pi-safe-area-top)", overflow: "hidden", background: "var(--bg)" }}>
       <div
         aria-hidden="true"
         style={{
@@ -751,7 +751,7 @@ export function AppShell() {
           top: 0,
           left: 0,
           right: 0,
-          height: "env(safe-area-inset-top)",
+          height: "var(--pi-safe-area-top)",
           background: "var(--bg-panel)",
           zIndex: 0,
           pointerEvents: "none",
@@ -1433,7 +1433,7 @@ export function AppShell() {
       title={rightPanelOpen ? "Hide right panel" : "Show right panel"}
       aria-label={rightPanelOpen ? "Hide right panel" : "Show right panel"}
       style={{
-        position: "fixed", top: "env(safe-area-inset-top)", right: 0, zIndex: 300,
+        position: "fixed", top: "var(--pi-safe-area-top)", right: 0, zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",
         width: 36, height: 36, padding: 0,
         background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",

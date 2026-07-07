@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { APP_DISPLAY_NAME_MAX_LENGTH, type AppSettings, DEFAULT_APP_SETTINGS } from "@/lib/app-settings";
+import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_MAX_WIDTH, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
 
 interface Props {
   settings: AppSettings;
@@ -65,7 +66,7 @@ export function SettingsModal({ settings, onClose, onSaved }: Props) {
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: SAFE_AREA_MODAL_PADDING, boxSizing: "border-box" }}
     >
       <button
         type="button"
@@ -73,7 +74,7 @@ export function SettingsModal({ settings, onClose, onSaved }: Props) {
         onClick={onClose}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", padding: 0, border: "none", background: "transparent", cursor: "default" }}
       />
-      <div style={{ position: "relative", width: isMobile ? "calc(100vw - 16px)" : 560, maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100dvh - 16px)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+      <div style={{ position: "relative", width: isMobile ? "100%" : 560, maxWidth: isMobile ? "100%" : SAFE_AREA_MODAL_MAX_WIDTH, maxHeight: SAFE_AREA_MODAL_MAX_HEIGHT, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Settings</span>
