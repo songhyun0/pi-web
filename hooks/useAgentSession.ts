@@ -1656,7 +1656,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return complete({ handled: true, message: "Opened session list" });
 
         case "settings":
-          await emitUiAction({ type: "openModelsConfig" });
+          await emitUiAction({ type: "openSettings" });
           return complete({ handled: true, message: "Opened settings" });
 
         case "scoped-models":
