@@ -32,8 +32,9 @@ export type SlashUiAction =
   | { type: "openBranchNavigator" }
   | { type: "openForkSelector" }
   | { type: "openModelsConfig"; section?: "models" | "auth" | "scoped" }
+  | { type: "openProjectTrust" }
   | { type: "newSession" }
-  | { type: "openSessionSidebar" };
+  | { type: "openSessionSidebar" }
 
 export const WEB_BUILTIN_SLASH_COMMANDS: WebBuiltinSlashCommand[] = [
   { name: "settings", description: "Open settings menu", source: "builtin", mode: "client-ui" },
@@ -50,7 +51,7 @@ export const WEB_BUILTIN_SLASH_COMMANDS: WebBuiltinSlashCommand[] = [
   { name: "fork", description: "Create a new fork from a previous user message", source: "builtin", mode: "client-ui" },
   { name: "clone", description: "Duplicate the current session at the current position", source: "builtin", mode: "agent" },
   { name: "tree", description: "Navigate session tree (switch branches)", source: "builtin", mode: "client-ui" },
-  { name: "trust", description: "Save project trust decision for future sessions", source: "builtin", mode: "unsupported" },
+  { name: "trust", description: "Save project trust decision for future sessions", source: "builtin", mode: "client-ui" },
   { name: "login", description: "Configure provider authentication", source: "builtin", mode: "client-ui", argHint: "[provider]" },
   { name: "logout", description: "Remove provider authentication", source: "builtin", mode: "client-ui", argHint: "[provider]" },
   { name: "new", description: "Start a new session", source: "builtin", mode: "client-ui" },

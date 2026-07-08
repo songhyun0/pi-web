@@ -12,6 +12,7 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { SettingsModal } from "./SettingsModal";
+import { ProjectTrustModal } from "./ProjectTrustModal";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -83,6 +84,7 @@ export function AppShell() {
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectTrustOpen, setProjectTrustOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
@@ -499,6 +501,9 @@ export function AppShell() {
         break;
       case "openModelsConfig":
         setModelsConfigOpen(true);
+        break;
+      case "openProjectTrust":
+        setProjectTrustOpen(true);
         break;
       case "newSession": {
         const cwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
@@ -1453,6 +1458,16 @@ export function AppShell() {
         settings={appSettings}
         onClose={() => setSettingsOpen(false)}
         onSaved={(next) => setAppSettings(next)}
+      />
+    )}
+    {projectTrustOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
+      <ProjectTrustModal
+        cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!}
+        onClose={() => setProjectTrustOpen(false)}
+        onChanged={() => {
+          setRefreshKey((k) => k + 1);
+          setModelsRefreshKey((k) => k + 1);
+        }}
       />
     )}
     {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
