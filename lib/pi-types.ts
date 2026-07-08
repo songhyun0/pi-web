@@ -27,6 +27,18 @@ export interface NavigateTreeResult {
   aborted?: boolean;
 }
 
+export interface BashCommandResult {
+  output: string;
+  exitCode: number | undefined;
+  cancelled: boolean;
+  truncated: boolean;
+  fullOutputPath?: string;
+  command?: string;
+  cwd?: string;
+  durationMs?: number;
+  excludeFromContext?: boolean;
+}
+
 export interface SessionStatsInfo {
   sessionFile?: string;
   sessionId: string;
@@ -117,6 +129,7 @@ export interface AgentSessionLike {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
   readonly isStreaming: boolean;
+  readonly isBashRunning?: boolean;
   readonly isCompacting: boolean;
   readonly autoCompactionEnabled: boolean;
   readonly autoRetryEnabled: boolean;
@@ -160,5 +173,7 @@ export interface AgentSessionLike {
   getActiveToolNames(): string[];
   setActiveToolsByName(names: string[]): void;
   abortCompaction(): void;
+  executeBash(command: string, onChunk?: (chunk: string) => void, options?: { excludeFromContext?: boolean }): Promise<BashCommandResult>;
+  abortBash(): void;
   getContextUsage(): ContextUsage | undefined;
 }

@@ -5,7 +5,7 @@ import { cacheSessionPath } from "./session-reader";
 import { loadPiBuiltinSlashCommands } from "./pi-builtin-slash-commands";
 import { ExtensionUiBridge } from "./extension-ui-bridge";
 import type { SlashCommandInfo } from "./slash-command-registry";
-import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import type { AgentSessionLike, BashCommandResult, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse } from "./types";
 import { getPiCodexFastModeState, loadPiCodexFastModeConfig, PI_CODEX_FAST_COMMAND_NAME, PI_CODEX_FAST_PACKAGE_NAME } from "./pi-codex-fast";
 
@@ -97,7 +97,7 @@ export class AgentSessionWrapper {
   }
 
   isRunning(): boolean {
-    return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting);
+    return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting || Boolean(this.inner.isBashRunning));
   }
 
   start(): void {
@@ -304,6 +304,7 @@ export class AgentSessionWrapper {
           isStreaming: this.inner.isStreaming,
           isPromptRunning: this.promptRunning,
           isCompacting: this.inner.isCompacting,
+          isBashRunning: Boolean(this.inner.isBashRunning),
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
           model: model ? { id: model.id, provider: model.provider } : undefined,
@@ -471,6 +472,38 @@ export class AgentSessionWrapper {
         this.inner.setAutoCompactionEnabled(command.enabled as boolean);
         return null;
       }
+
+      case "user_bash": {
+        const bashCommand = (command.command as string | undefined)?.trim();
+        if (!bashCommand) throw new Error("Command cannot be empty");
+        const excludeFromContext = command.excludeFromContext === true;
+        const cwd = this.inner.sessionManager.getCwd();
+        const startedAt = Date.now();
+        notifyRunningChange();
+        this.emit({ type: "user_bash_start", command: bashCommand, cwd, excludeFromContext });
+        try {
+          const result = await this.inner.executeBash(
+            bashCommand,
+            (chunk) => this.emit({ type: "user_bash_chunk", command: bashCommand, chunk }),
+            { excludeFromContext },
+          );
+          const response: BashCommandResult = {
+            ...result,
+            command: bashCommand,
+            cwd,
+            durationMs: Date.now() - startedAt,
+            excludeFromContext,
+          };
+          this.emit({ type: "user_bash_end", ...response });
+          return response;
+        } finally {
+          notifyRunningChange();
+        }
+      }
+
+      case "abort_bash":
+        this.inner.abortBash();
+        return null;
 
       case "clear_queue": {
         // Full clear only: pi has no single-item dequeue, and clear+requeue
