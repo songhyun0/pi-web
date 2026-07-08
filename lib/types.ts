@@ -169,11 +169,45 @@ export type ExtensionUiRequest =
   | {
       type: "extension_ui_request";
       id: string;
+      method: "paste_editor_text";
+      text: string;
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
       method: "custom";
       lines: string[];
       columns?: number;
       rows?: number;
       closed?: boolean;
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
+      method: "setChrome";
+      chrome: ExtensionChromeState;
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
+      method: "compatibility_report";
+      reports: ExtensionCompatibilityItem[];
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
+      method: "autocomplete_provider";
+      providerId: string;
+      label?: string;
+      active: boolean;
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
+      method: "setTheme";
+      themeName: string;
+      success: boolean;
+      error?: string;
     };
 
 export type ExtensionUiResponse =
@@ -184,6 +218,25 @@ export type ExtensionUiResponse =
 export interface ExtensionStatusItem {
   key: string;
   text: string;
+}
+
+export interface ExtensionWorkingState {
+  visible: boolean;
+  message?: string;
+  frames?: string[];
+  intervalMs?: number;
+}
+
+export interface ExtensionChromeState {
+  headerLines: string[];
+  footerLines: string[];
+  working: ExtensionWorkingState;
+}
+
+export interface ExtensionCompatibilityItem {
+  api: string;
+  status: "supported" | "degraded" | "unsupported";
+  details: string;
 }
 
 export interface ExtensionWidgetItem {

@@ -102,12 +102,12 @@ export interface ExtensionUiContextLike {
   pasteToEditor(text: string): void;
   setEditorText(text: string): void;
   getEditorText(): string;
-  addAutocompleteProvider(): void;
-  setEditorComponent(): void;
+  addAutocompleteProvider(provider: unknown): void | (() => void);
+  setEditorComponent(component?: unknown): void;
   getEditorComponent(): undefined;
   readonly theme: unknown;
   getAllThemes(): unknown[];
-  getTheme(name: string): undefined;
+  getTheme(name: string): unknown;
   setTheme(theme: unknown): { success: boolean; error?: string };
   getToolsExpanded(): boolean;
   setToolsExpanded(expanded: boolean): void;

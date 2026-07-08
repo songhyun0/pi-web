@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
-import type { ExtensionStatusItem, ExtensionUiRequest, ExtensionWidgetItem } from "@/lib/types";
+import type { ExtensionChromeState, ExtensionCompatibilityItem, ExtensionStatusItem, ExtensionUiRequest, ExtensionWidgetItem } from "@/lib/types";
 
 type ExtensionDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
@@ -43,18 +43,82 @@ export function ExtensionUiHost({
 export function ExtensionUiInline({
   statuses,
   widgets,
+  chrome,
+  compatibility,
 }: {
   statuses?: ExtensionStatusItem[];
   widgets: ExtensionWidgetItem[];
+  chrome?: ExtensionChromeState;
+  compatibility?: ExtensionCompatibilityItem[];
 }) {
   return (
     <>
+      {chrome ? <ExtensionChrome chrome={chrome} /> : null}
       {statuses ? <ExtensionStatusBar statuses={statuses} /> : null}
+      {compatibility ? <ExtensionCompatibility reports={compatibility} /> : null}
       <ExtensionWidgets widgets={widgets} />
     </>
   );
 }
 
+function ExtensionChrome({ chrome }: { chrome: ExtensionChromeState }) {
+  const hasHeader = chrome.headerLines.length > 0;
+  const hasFooter = chrome.footerLines.length > 0;
+  const hasWorking = chrome.working.visible || !!chrome.working.message;
+  if (!hasHeader && !hasFooter && !hasWorking) return null;
+  return (
+    <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+      {hasHeader && <ExtensionLineCard tone="accent" lines={chrome.headerLines} label="extension header" />}
+      {hasWorking && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "6px 9px", border: "1px solid color-mix(in srgb, var(--accent) 25%, var(--border))",
+          borderRadius: 7, background: "color-mix(in srgb, var(--accent) 6%, var(--bg))",
+          color: "var(--text-muted)", fontSize: 12,
+        }}>
+          <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>●</span>
+          <span>{chrome.working.message ?? "Extension working"}</span>
+        </div>
+      )}
+      {hasFooter && <ExtensionLineCard tone="muted" lines={chrome.footerLines} label="extension footer" />}
+    </div>
+  );
+}
+
+function ExtensionLineCard({ lines, label, tone }: { lines: string[]; label: string; tone: "accent" | "muted" }) {
+  return (
+    <div style={{
+      border: "1px solid var(--border)",
+      borderRadius: 7,
+      background: tone === "accent" ? "color-mix(in srgb, var(--accent) 5%, var(--bg-panel))" : "var(--bg-panel)",
+      overflow: "hidden",
+    }}>
+      <div style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)", textTransform: "uppercase" }}>{label}</div>
+      <pre style={{ margin: 0, padding: "7px 8px", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}>
+        {lines.map((line, index, allLines) => (
+          <Fragment key={index}>
+            {renderAnsiLine(line, `${label}-${index}`)}
+            {index < allLines.length - 1 ? "\n" : null}
+          </Fragment>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function ExtensionCompatibility({ reports }: { reports: ExtensionCompatibilityItem[] }) {
+  const visible = reports.filter((report) => report.status !== "supported").slice(0, 3);
+  if (visible.length === 0) return null;
+  return (
+    <div style={{ display: "grid", gap: 5, marginBottom: 10 }}>
+      {visible.map((report) => (
+        <div key={`${report.api}:${report.status}`} style={{ padding: "5px 8px", border: "1px solid rgba(234,179,8,0.28)", borderRadius: 6, background: "rgba(234,179,8,0.07)", color: "var(--text-muted)", fontSize: 11 }}>
+          <span style={{ fontFamily: "var(--font-mono)", color: "rgba(180,130,0,1)" }}>{report.api}</span> · {report.details}
+        </div>
+      ))}
+    </div>
+  );
+}
 function ExtensionStatusBar({ statuses }: { statuses: ExtensionStatusItem[] }) {
   if (statuses.length === 0) return null;
   return (

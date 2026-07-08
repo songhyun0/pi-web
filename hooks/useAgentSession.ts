@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef, useEffect, useReducer } from "react";
 import type {
   AgentMessage,
+  ExtensionChromeState,
+  ExtensionCompatibilityItem,
   ExtensionStatusItem,
   ExtensionUiRequest,
   ExtensionWidgetItem,
@@ -83,9 +85,31 @@ interface ForkCandidatesResponse {
   messages?: ForkCandidate[];
 }
 
+export type ExtensionAutocompleteProviderState = {
+  id: string;
+  label?: string;
+  active: boolean;
+};
+
+export type ExtensionAutocompleteSuggestion = {
+  id: string;
+  label: string;
+  value: string;
+  description?: string;
+  prefix?: string;
+};
+
+export type ExtensionAutocompleteResult = {
+  providerId: string;
+  label?: string;
+  items: ExtensionAutocompleteSuggestion[];
+} | null;
+
 type OpenAIFastToggleResponse = {
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
+  extensionChrome?: ExtensionChromeState;
+  extensionCompatibility?: ExtensionCompatibilityItem[];
   openAIFastMode?: OpenAIFastModeState;
   openAIFastConfig?: OpenAIFastModeConfigState;
 };
@@ -99,6 +123,9 @@ type AgentStateResponse = {
   isCompacting?: boolean;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
+  extensionChrome?: ExtensionChromeState;
+  extensionCompatibility?: ExtensionCompatibilityItem[];
+  extensionAutocompleteProviders?: ExtensionAutocompleteProviderState[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
   openAIFastMode?: OpenAIFastModeState;
   openAIFastConfig?: OpenAIFastModeConfigState;
@@ -401,6 +428,7 @@ function readCompactResult(result: unknown, reason: string): CompactResultInfo |
 
 export interface ChatInputHandle {
   insertText: (text: string) => void;
+  setText: (text: string) => void;
   insertIfEmpty: (content: string) => void;
   prependText: (text: string) => void;
   addImages: (files: File[]) => void;
@@ -541,6 +569,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
+  const [extensionChrome, setExtensionChrome] = useState<ExtensionChromeState>({ headerLines: [], footerLines: [], working: { visible: false } });
+  const [extensionCompatibility, setExtensionCompatibility] = useState<ExtensionCompatibilityItem[]>([]);
+  const [extensionAutocompleteProviders, setExtensionAutocompleteProviders] = useState<ExtensionAutocompleteProviderState[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
   const [openAIFastConfig, setOpenAIFastConfig] = useState<OpenAIFastModeConfigState>(DEFAULT_OPENAI_FAST_CONFIG);
   const [openAIFastModeState, setOpenAIFastModeState] = useState<OpenAIFastModeState | null>(null);
@@ -586,6 +617,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const applyOpenAIFastFromState = useCallback((state?: AgentStateResponse | null) => {
     if (state?.openAIFastConfig !== undefined) setOpenAIFastConfig(state.openAIFastConfig ?? DEFAULT_OPENAI_FAST_CONFIG);
     if (state?.openAIFastMode !== undefined) setOpenAIFastModeState(state.openAIFastMode ?? null);
+  }, []);
+  const applyExtensionUiFromState = useCallback((state?: AgentStateResponse | null) => {
+    if (state?.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
+    if (state?.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
+    if (state?.extensionChrome !== undefined) setExtensionChrome(state.extensionChrome ?? { headerLines: [], footerLines: [], working: { visible: false } });
+    if (state?.extensionCompatibility !== undefined) setExtensionCompatibility(state.extensionCompatibility ?? []);
+    if (state?.extensionAutocompleteProviders !== undefined) setExtensionAutocompleteProviders(state.extensionAutocompleteProviders ?? []);
   }, []);
 
   const sessionStats = (() => {
@@ -657,8 +695,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         applyOpenAIFastFromState(liveState);
         if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
         if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
-        if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
-        if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
+        applyExtensionUiFromState(liveState);
         if (liveState.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
       }
       else if (d.agentState && !d.agentState.running) setQueuedMessages({ steering: [], followUp: [] });
@@ -673,7 +710,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [applyContextUsageFromState, applyOpenAIFastFromState]);
+  }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -883,6 +920,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  const sendEditorSnapshot = useCallback((text: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid || extensionAutocompleteProviders.length === 0) return;
+    void sendAgentCommand(sid, { type: "extension_editor_snapshot", text }).catch(() => {});
+  }, [extensionAutocompleteProviders.length]);
+
+  const requestExtensionAutocomplete = useCallback(async (text: string, cursor: number): Promise<ExtensionAutocompleteResult> => {
+    const sid = sessionIdRef.current;
+    if (!sid || extensionAutocompleteProviders.length === 0) return null;
+    try {
+      return await sendAgentCommand<ExtensionAutocompleteResult>(sid, { type: "extension_autocomplete", text, cursor });
+    } catch {
+      return null;
+    }
+  }, [extensionAutocompleteProviders.length]);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -934,7 +987,31 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (request.title) document.title = request.title;
         break;
       case "set_editor_text":
+        opts.chatInputRef?.current?.setText(request.text);
+        break;
+      case "paste_editor_text":
         opts.chatInputRef?.current?.insertText(request.text);
+        break;
+      case "setChrome":
+        setExtensionChrome(request.chrome);
+        break;
+      case "compatibility_report":
+        setExtensionCompatibility(request.reports);
+        break;
+      case "autocomplete_provider":
+        setExtensionAutocompleteProviders((prev) => {
+          const rest = prev.filter((provider) => provider.id !== request.providerId);
+          return request.active ? [...rest, { id: request.providerId, label: request.label, active: true }] : rest;
+        });
+        break;
+      case "setTheme":
+        if (request.success && typeof window !== "undefined") {
+          const next = request.themeName === "dark" ? "dark" : request.themeName === "light" ? "light" : undefined;
+          if (next === "dark") document.documentElement.classList.add("dark");
+          if (next === "light") document.documentElement.classList.remove("dark");
+          localStorage.setItem("pi-theme", request.themeName);
+          window.dispatchEvent(new CustomEvent("pi-theme-change", { detail: request.themeName }));
+        }
         break;
       case "custom":
         setExtensionCustomUi((current) => {
@@ -978,6 +1055,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const state = data.state;
           applyContextUsageFromState(state);
           applyOpenAIFastFromState(state);
+          applyExtensionUiFromState(state);
           if (!data.running || !state || (!state.isStreaming && !state.isPromptRunning)) {
             await finishPromptWithoutStream(sid, runId);
             return;
@@ -988,7 +1066,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       await delay(PROMPT_SETTLE_POLL_MS);
     }
-  }, [applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
 
   const fetchLiveContextUsage = useCallback(async (runId: number) => {
     const sid = sessionIdRef.current;
@@ -1003,12 +1081,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (promptRunIdRef.current !== runId || !agentRunningRef.current) return;
       applyContextUsageFromState(data.state);
       applyOpenAIFastFromState(data.state);
+      applyExtensionUiFromState(data.state);
     } catch {
       // Best-effort live refresh; final/reconcile paths remain authoritative.
     } finally {
       liveContextUsageRefreshInFlightRef.current = false;
     }
-  }, [applyContextUsageFromState, applyOpenAIFastFromState]);
+  }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState]);
 
   const requestLiveContextUsageRefresh = useCallback((options: { immediate?: boolean } = {}) => {
     if (!agentRunningRef.current) return;
@@ -1069,20 +1148,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (state) {
         applyContextUsageFromState(state);
         applyOpenAIFastFromState(state);
+        applyExtensionUiFromState(state);
       }
       const busy = data.running && state
         && (state.isStreaming || state.isPromptRunning || state.isCompacting);
       if (busy || !agentRunningRef.current) return;
       if (state) {
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
-        if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
-        if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
+        applyExtensionUiFromState(state);
       }
       await finishPromptWithoutStream(sid, runId);
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
-  }, [applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
+  }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, finishPromptWithoutStream]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1138,9 +1217,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .then((d: { state?: AgentStateResponse }) => {
               applyContextUsageFromState(d.state);
               applyOpenAIFastFromState(d.state);
-              if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
-              if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
-              if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
+              applyExtensionUiFromState(d.state);
               // Aborted turns can leave messages queued in pi (delivered with the
               // next turn); dead wrapper (no state) means the queue is gone.
               setQueuedMessages(normalizeQueuedMessages(d.state?.queuedMessages));
@@ -1270,7 +1347,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyContextUsageFromState, applyOpenAIFastFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
+  }, [addNotice, applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1452,14 +1529,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     try {
       const result = await sendAgentCommand<OpenAIFastToggleResponse>(sid, { type: "toggle_openai_fast" });
-      if (result?.extensionStatuses) setExtensionStatuses(result.extensionStatuses);
-      if (result?.extensionWidgets) setExtensionWidgets(result.extensionWidgets);
+      applyExtensionUiFromState(result as AgentStateResponse);
       if (result?.openAIFastConfig) setOpenAIFastConfig(result.openAIFastConfig);
       if (result?.openAIFastMode) setOpenAIFastModeState(result.openAIFastMode);
     } catch (e) {
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
     }
-  }, [addNotice, ensureNewSession]);
+  }, [addNotice, applyExtensionUiFromState, ensureNewSession]);
 
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1850,10 +1926,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           applyContextUsageFromState(agentState.state);
           applyOpenAIFastFromState(agentState.state);
+          applyExtensionUiFromState(agentState.state);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
-          if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
-          if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
           if (agentState.state.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(agentState.state.queuedMessages));
         }
       });
@@ -1965,7 +2040,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize,
+    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, extensionChrome, extensionCompatibility, extensionAutocompleteProviders, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize, sendEditorSnapshot, requestExtensionAutocomplete,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,
