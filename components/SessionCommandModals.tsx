@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { AgentMessage, SessionEntry, SessionTreeNode } from "@/lib/types";
+import type { SessionTreeNode } from "@/lib/types";
+import { filterTreeRows, flattenTree, type TreeFilterMode, type TreeRow } from "@/lib/session-tree-view";
 import type { ForkCandidate } from "@/hooks/useAgentSession";
 
 type ModalShellProps = {
@@ -121,191 +122,6 @@ function SecondaryButton({ children, onClick }: { children: ReactNode; onClick: 
   );
 }
 
-function extractMessageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) =>
-      block && typeof block === "object"
-        && (block as { type?: unknown }).type === "text"
-        && typeof (block as { text?: unknown }).text === "string"
-        ? (block as { text: string }).text
-        : "")
-    .filter(Boolean)
-    .join("\n");
-}
-
-function entryLabel(entry: SessionEntry): { role?: string; title: string; detail: string } {
-  if (entry.type === "message" && "message" in entry) {
-    const role = (entry.message as AgentMessage).role;
-    const text = extractMessageText(entry.message as AgentMessage).replace(/\s+/g, " ").trim();
-    return {
-      role,
-      title: text || (role === "assistant" ? "[assistant]" : `[${role}]`),
-      detail: role,
-    };
-  }
-  if (entry.type === "branch_summary") return { title: entry.summary || "Branch summary", detail: "branch summary" };
-  if (entry.type === "compaction") return { title: entry.summary || "Compaction", detail: "compaction" };
-  if (entry.type === "model_change") return { title: `${entry.provider}/${entry.modelId}`, detail: "model" };
-  if (entry.type === "thinking_level_change") return { title: entry.thinkingLevel, detail: "thinking" };
-  if (entry.type === "session_info") return { title: entry.name || "Session info", detail: "session" };
-  return { title: entry.type, detail: entry.type };
-}
-
-function buildActivePath(nodes: SessionTreeNode[], activeLeafId: string | null): Set<string> {
-  if (!activeLeafId) return new Set();
-  const stack = [...nodes].reverse().map((node) => ({ node, path: [] as string[] }));
-  while (stack.length > 0) {
-    const { node, path } = stack.pop()!;
-    const nextPath = [...path, node.entry.id];
-    if (node.entry.id === activeLeafId || node.compressedEntryIds?.includes(activeLeafId)) {
-      return new Set(nextPath);
-    }
-    for (let i = node.children.length - 1; i >= 0; i -= 1) {
-      stack.push({ node: node.children[i], path: nextPath });
-    }
-  }
-  return new Set();
-}
-
-interface TreeRow {
-  id: string;
-  key: string;
-  connector: string;
-  depth: number;
-  title: string;
-  detail: string;
-  role?: string;
-  childCount: number;
-  skipped: number;
-  isActive: boolean;
-  isOnPath: boolean;
-  searchText: string;
-}
-
-interface TreeGutter {
-  position: number;
-  show: boolean;
-}
-
-function treeContainsActive(node: SessionTreeNode, activeLeafId: string | null, cache: Map<SessionTreeNode, boolean>): boolean {
-  const cached = cache.get(node);
-  if (cached !== undefined) return cached;
-  const self = Boolean(activeLeafId && (node.entry.id === activeLeafId || node.compressedEntryIds?.includes(activeLeafId)));
-  const child = node.children.some((child) => treeContainsActive(child, activeLeafId, cache));
-  const result = self || child;
-  cache.set(node, result);
-  return result;
-}
-
-function orderActiveBranchFirst(nodes: SessionTreeNode[], activeLeafId: string | null, cache: Map<SessionTreeNode, boolean>): SessionTreeNode[] {
-  return [...nodes].sort((a, b) => Number(treeContainsActive(b, activeLeafId, cache)) - Number(treeContainsActive(a, activeLeafId, cache)));
-}
-
-function buildCliConnector(displayIndent: number, showConnector: boolean, isVirtualRootChild: boolean, isLast: boolean, gutters: TreeGutter[]): string {
-  const connectorDisplayed = showConnector && !isVirtualRootChild;
-  const connectorPosition = connectorDisplayed ? displayIndent - 1 : -1;
-  const totalChars = displayIndent * 3;
-  const chars: string[] = [];
-
-  for (let i = 0; i < totalChars; i += 1) {
-    const level = Math.floor(i / 3);
-    const posInLevel = i % 3;
-    const gutter = gutters.find((g) => g.position === level);
-    if (gutter) {
-      chars.push(posInLevel === 0 && gutter.show ? "│" : " ");
-    } else if (connectorDisplayed && level === connectorPosition) {
-      chars.push(posInLevel === 0 ? (isLast ? "└" : "├") : posInLevel === 1 ? "─" : " ");
-    } else {
-      chars.push(" ");
-    }
-  }
-
-  return chars.join("");
-}
-
-function flattenTree(nodes: SessionTreeNode[], activeLeafId: string | null): TreeRow[] {
-  const activePath = buildActivePath(nodes, activeLeafId);
-  const containsActive = new Map<SessionTreeNode, boolean>();
-  const rows: TreeRow[] = [];
-  const multipleRoots = nodes.length > 1;
-  const orderedRoots = orderActiveBranchFirst(nodes, activeLeafId, containsActive);
-  const stack: Array<{
-    node: SessionTreeNode;
-    indent: number;
-    justBranched: boolean;
-    showConnector: boolean;
-    isLast: boolean;
-    gutters: TreeGutter[];
-    isVirtualRootChild: boolean;
-  }> = [];
-
-  for (let i = orderedRoots.length - 1; i >= 0; i -= 1) {
-    stack.push({
-      node: orderedRoots[i],
-      indent: multipleRoots ? 1 : 0,
-      justBranched: multipleRoots,
-      showConnector: multipleRoots,
-      isLast: i === orderedRoots.length - 1,
-      gutters: [],
-      isVirtualRootChild: multipleRoots,
-    });
-  }
-
-  while (stack.length > 0) {
-    const { node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild } = stack.pop()!;
-    const label = entryLabel(node.entry);
-    const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-    const connector = buildCliConnector(displayIndent, showConnector, isVirtualRootChild, isLast, gutters);
-    const skipped = node.compressedEntryIds?.length ?? 0;
-    const isActive = node.entry.id === activeLeafId || Boolean(activeLeafId && node.compressedEntryIds?.includes(activeLeafId));
-    const isOnPath = activePath.has(node.entry.id) || isActive;
-    rows.push({
-      id: node.entry.id,
-      key: node.entry.id,
-      connector,
-      depth: displayIndent,
-      title: label.title,
-      detail: label.detail,
-      role: label.role,
-      childCount: node.children.length,
-      skipped,
-      isActive,
-      isOnPath,
-      searchText: `${label.title} ${label.detail} ${node.entry.id}`.toLowerCase(),
-    });
-
-    const children = node.children;
-    const multipleChildren = children.length > 1;
-    const orderedChildren = orderActiveBranchFirst(children, activeLeafId, containsActive);
-    const childIndent = multipleChildren
-      ? indent + 1
-      : justBranched && indent > 0
-        ? indent + 1
-        : indent;
-
-    const connectorDisplayed = showConnector && !isVirtualRootChild;
-    const connectorPosition = Math.max(0, displayIndent - 1);
-    const childGutters = connectorDisplayed
-      ? [...gutters, { position: connectorPosition, show: !isLast }]
-      : gutters;
-
-    for (let i = orderedChildren.length - 1; i >= 0; i -= 1) {
-      stack.push({
-        node: orderedChildren[i],
-        indent: childIndent,
-        justBranched: multipleChildren,
-        showConnector: multipleChildren,
-        isLast: i === orderedChildren.length - 1,
-        gutters: childGutters,
-        isVirtualRootChild: false,
-      });
-    }
-  }
-  return rows;
-}
 
 function RoleBadge({ role }: { role?: string }) {
   if (!role) return null;
@@ -336,6 +152,7 @@ export function SessionTreeSelectorModal({
   error,
   onClose,
   onSelect,
+  onLabelChange,
 }: {
   tree: SessionTreeNode[];
   activeLeafId: string | null;
@@ -343,20 +160,24 @@ export function SessionTreeSelectorModal({
   error?: string | null;
   onClose: () => void;
   onSelect: (entryId: string, options?: { summarize?: boolean }) => void | Promise<void>;
+  onLabelChange?: (entryId: string, label: string | undefined) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
+  const [filterMode, setFilterMode] = useState<TreeFilterMode>("default");
   const [activeIndex, setActiveIndex] = useState(0);
   const [summarize, setSummarize] = useState(false);
+  const [showLabelTimestamps, setShowLabelTimestamps] = useState(false);
+  const [foldedIds, setFoldedIds] = useState<Set<string>>(() => new Set());
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [labelSaving, setLabelSaving] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
   const [navigating, setNavigating] = useState(false);
-  const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const rows = useMemo(() => flattenTree(tree, activeLeafId), [tree, activeLeafId]);
-  const filteredRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((row) => row.searchText.includes(q));
-  }, [query, rows]);
+  const rows = useMemo(() => flattenTree(tree, activeLeafId, { foldedIds, showLabelTimestamps }), [tree, activeLeafId, foldedIds, showLabelTimestamps]);
+  const filteredRows = useMemo(() => filterTreeRows(rows, query, filterMode), [filterMode, query, rows]);
 
   useEffect(() => {
     const activeRowIndex = filteredRows.findIndex((row) => row.isActive);
@@ -387,13 +208,43 @@ export function SessionTreeSelectorModal({
     }
   }, [navigating, onClose, onSelect, summarize]);
   const confirm = useCallback(() => confirmRow(selected), [confirmRow, selected]);
+  const toggleFold = useCallback((row: TreeRow | undefined) => {
+    if (!row?.hasChildren) return;
+    setFoldedIds((current) => {
+      const next = new Set(current);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.add(row.id);
+      return next;
+    });
+  }, []);
+  const beginEditLabel = useCallback((row: TreeRow | undefined) => {
+    if (!row || !onLabelChange) return;
+    setEditingLabelId(row.id);
+    setLabelDraft(row.label ?? "");
+    setLabelError(null);
+  }, [onLabelChange]);
+  const saveLabel = useCallback(async (row: TreeRow, label: string | undefined) => {
+    if (!onLabelChange || labelSaving) return;
+    setLabelSaving(true);
+    setLabelError(null);
+    try {
+      await onLabelChange(row.id, label);
+      setEditingLabelId(null);
+      setLabelDraft("");
+    } catch (err) {
+      setLabelError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLabelSaving(false);
+    }
+  }, [labelSaving, onLabelChange]);
 
   return (
     <ModalShell
       title="Navigate session tree"
-      subtitle="CLI-style branch selector · ↑/↓ move · Enter navigate · Esc cancel"
+      subtitle="CLI-style tree · ↑/↓ move · PgUp/PgDn jump · ←/→ fold · L label · Enter navigate"
       onClose={onClose}
       onKeyDownCapture={(event) => {
+        if ((event.target as HTMLElement | null)?.dataset.treeLabelEditor === "true") return;
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
@@ -403,6 +254,27 @@ export function SessionTreeSelectorModal({
         } else if (event.key === "ArrowUp") {
           event.preventDefault();
           setActiveIndex((idx) => Math.max(0, idx - 1));
+        } else if (event.key === "PageDown") {
+          event.preventDefault();
+          setActiveIndex((idx) => Math.min(Math.max(0, filteredRows.length - 1), idx + 10));
+        } else if (event.key === "PageUp") {
+          event.preventDefault();
+          setActiveIndex((idx) => Math.max(0, idx - 10));
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          setActiveIndex(0);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          setActiveIndex(Math.max(0, filteredRows.length - 1));
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          if (selected?.hasChildren && !selected.isFolded) toggleFold(selected);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          if (selected?.hasChildren && selected.isFolded) toggleFold(selected);
+        } else if (event.key.toLowerCase() === "l") {
+          event.preventDefault();
+          beginEditLabel(selected);
         } else if (event.key === "Enter") {
           event.preventDefault();
           void confirm();
@@ -421,12 +293,12 @@ export function SessionTreeSelectorModal({
         </>
       )}
     >
-      <div style={{ padding: 14, borderBottom: "1px solid var(--border)" }}>
+      <div style={{ padding: 14, borderBottom: "1px solid var(--border)", display: "grid", gap: 10 }}>
         <input
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter entries by text, role, or id…"
+          placeholder="Search labels, text, tool names, roles, or ids…"
           style={{
             width: "100%",
             padding: "9px 10px",
@@ -438,6 +310,28 @@ export function SessionTreeSelectorModal({
             fontSize: 13,
           }}
         />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select
+            value={filterMode}
+            onChange={(event) => setFilterMode(event.target.value as TreeFilterMode)}
+            style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--text)", padding: "6px 8px", fontSize: 12 }}
+            title="Filter mode"
+          >
+            <option value="default">Default</option>
+            <option value="no-tools">No tools</option>
+            <option value="user-only">User only</option>
+            <option value="labeled-only">Labeled only</option>
+            <option value="all">All entries</option>
+          </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 12 }}>
+            <input type="checkbox" checked={showLabelTimestamps} onChange={(event) => setShowLabelTimestamps(event.target.checked)} />
+            label timestamps
+          </label>
+          <button type="button" onClick={() => setFoldedIds(new Set(rows.filter((row) => row.hasChildren && !row.isOnPath).map((row) => row.id)))} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Fold all</button>
+          <button type="button" onClick={() => setFoldedIds(new Set())} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Unfold all</button>
+          <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{filteredRows.length}/{rows.length}</span>
+        </div>
+        {labelError && <div style={{ color: "#ef4444", fontSize: 12 }}>{labelError}</div>}
       </div>
       <div style={{ flex: 1, minHeight: 260, maxHeight: "min(520px, calc(100vh - 250px))", overflowY: "auto", padding: 10 }}>
         {loading ? (
@@ -451,36 +345,70 @@ export function SessionTreeSelectorModal({
         ) : filteredRows.map((row, index) => {
           const active = index === activeIndex;
           return (
-            <button
-              key={row.key}
-              ref={(node) => { rowRefs.current[index] = node; }}
-              type="button"
-              onClick={() => setActiveIndex(index)}
-              onDoubleClick={() => void confirmRow(row)}
-              style={{
-                width: "100%",
-                minWidth: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "6px 8px",
-                borderRadius: 7,
-                border: active ? "1px solid color-mix(in srgb, var(--accent) 42%, var(--border))" : "1px solid transparent",
-                background: active ? "color-mix(in srgb, var(--accent) 9%, var(--bg))" : row.isActive ? "var(--bg-selected)" : "transparent",
-                color: row.isActive ? "var(--text)" : row.isOnPath ? "var(--text-muted)" : "var(--text-dim)",
-                cursor: "pointer",
-                textAlign: "left",
-                fontSize: 12,
-              }}
-            >
-              <span style={{ width: Math.max(26, row.depth * 22 + 18), flexShrink: 0, color: row.isOnPath ? "var(--text-muted)" : "var(--text-dim)", fontFamily: "var(--font-mono)", whiteSpace: "pre" }}>{row.connector}</span>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: row.isActive ? "var(--accent)" : row.isOnPath ? "var(--text-muted)" : "var(--border)", flexShrink: 0 }} />
-              <RoleBadge role={row.role} />
-              {row.skipped > 0 && <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>+{row.skipped}</span>}
-              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{row.title}</span>
-              {row.childCount > 1 && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>{row.childCount} branches</span>}
-              {row.isActive && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>current</span>}
-            </button>
+            <div key={row.key}>
+              <div
+                ref={(node) => { rowRefs.current[index] = node; }}
+                role="button"
+                tabIndex={-1}
+                onClick={() => setActiveIndex(index)}
+                onDoubleClick={() => void confirmRow(row)}
+                style={{
+                  width: "100%",
+                  minWidth: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "6px 8px",
+                  borderRadius: 7,
+                  border: active ? "1px solid color-mix(in srgb, var(--accent) 42%, var(--border))" : "1px solid transparent",
+                  background: active ? "color-mix(in srgb, var(--accent) 9%, var(--bg))" : row.isActive ? "var(--bg-selected)" : "transparent",
+                  color: row.isActive ? "var(--text)" : row.isOnPath ? "var(--text-muted)" : "var(--text-dim)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ width: Math.max(26, row.depth * 22 + 18), flexShrink: 0, color: row.isOnPath ? "var(--text-muted)" : "var(--text-dim)", fontFamily: "var(--font-mono)", whiteSpace: "pre" }}>{row.connector}</span>
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); toggleFold(row); }}
+                  disabled={!row.hasChildren}
+                  title={row.hasChildren ? (row.isFolded ? "Unfold" : "Fold") : "No children"}
+                  style={{ width: 16, height: 16, border: "none", background: "transparent", color: row.hasChildren ? "var(--text-dim)" : "transparent", cursor: row.hasChildren ? "pointer" : "default", padding: 0, flexShrink: 0 }}
+                >
+                  {row.hasChildren ? (row.isFolded ? "▸" : "▾") : "·"}
+                </button>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: row.isActive ? "var(--accent)" : row.isOnPath ? "var(--text-muted)" : "var(--border)", flexShrink: 0 }} />
+                <RoleBadge role={row.role} />
+                {row.skipped > 0 && <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>+{row.skipped}</span>}
+                <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.title}</span>
+                  {row.label && <span title={row.labelTimestampText ? `Labeled ${row.labelTimestampText}` : "Label"} style={{ border: "1px solid color-mix(in srgb, var(--accent) 38%, var(--border))", borderRadius: 999, color: "var(--accent)", padding: "1px 6px", fontSize: 10, fontFamily: "var(--font-mono)", flexShrink: 0 }}>#{row.label}{row.labelTimestampText ? ` · ${row.labelTimestampText}` : ""}</span>}
+                </span>
+                {row.childCount > 1 && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>{row.childCount} branches</span>}
+                {onLabelChange && <button type="button" onClick={(event) => { event.stopPropagation(); beginEditLabel(row); }} style={{ border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text-dim)", borderRadius: 5, padding: "2px 5px", fontSize: 10, cursor: "pointer", flexShrink: 0 }}>label</button>}
+                {row.isActive && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>current</span>}
+              </div>
+              {editingLabelId === row.id && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 8px 8px", paddingLeft: Math.max(34, row.depth * 22 + 34) }}>
+                  <input
+                    data-tree-label-editor="true"
+                    value={labelDraft}
+                    onChange={(event) => setLabelDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { event.preventDefault(); void saveLabel(row, labelDraft.trim() || undefined); }
+                      if (event.key === "Escape") { event.preventDefault(); setEditingLabelId(null); }
+                    }}
+                    autoFocus
+                    placeholder="Label/bookmark…"
+                    style={{ minWidth: 180, flex: 1, border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)", color: "var(--text)", padding: "6px 8px", fontSize: 12 }}
+                  />
+                  <button type="button" disabled={labelSaving} onClick={() => void saveLabel(row, labelDraft.trim() || undefined)} style={{ border: "1px solid var(--accent)", background: "var(--accent)", color: "white", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: labelSaving ? "default" : "pointer" }}>{labelSaving ? "Saving…" : "Save"}</button>
+                  {row.label && <button type="button" disabled={labelSaving} onClick={() => void saveLabel(row, undefined)} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: labelSaving ? "default" : "pointer" }}>Clear</button>}
+                  <button type="button" onClick={() => setEditingLabelId(null)} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>

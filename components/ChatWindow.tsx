@@ -302,8 +302,25 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
           error: err instanceof Error ? err.message : String(err),
         });
       });
-    return () => controller.abort();
   }, [activeLeafId, data?.sessionId, data?.tree, session?.id, treeSelectorOpen]);
+  const handleTreeLabelChange = useCallback(async (entryId: string, label: string | undefined) => {
+    const sid = fullTreeState.sessionId ?? data?.sessionId ?? session?.id ?? null;
+    if (!sid) throw new Error("No active session");
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/tree`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: entryId, label }),
+    });
+    const body = await res.json().catch(() => ({})) as { tree?: SessionTreeNode[]; leafId?: string | null; error?: string };
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+    setFullTreeState((current) => ({
+      sessionId: sid,
+      tree: body.tree ?? current.tree,
+      leafId: body.leafId ?? current.leafId,
+      loading: false,
+      error: null,
+    }));
+  }, [data?.sessionId, fullTreeState.sessionId, session?.id]);
 
   const chatInputElement = (
     <ChatInput
@@ -427,6 +444,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
           error={fullTreeState.error}
           onClose={() => setTreeSelectorOpen(false)}
           onSelect={handleNavigate}
+          onLabelChange={handleTreeLabelChange}
         />
       )}
 

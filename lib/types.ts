@@ -350,6 +350,7 @@ export interface SessionTreeNode {
   entry: SessionEntry;
   children: SessionTreeNode[];
   label?: string;
+  labelTimestamp?: string;
   compressedEntryIds?: string[];
 }
 
