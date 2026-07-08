@@ -5,6 +5,7 @@
 ```bash
 npm run dev        # web server on port 30141
 npm run terminal   # optional terminal server on port 30142 for TerminalPanel
+```
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
 Lint: `npm run lint`  
@@ -44,7 +45,7 @@ app/api/
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
   sessions/[id]/tree/route.ts     GET full tree | PATCH label changes
-  agent/new/route.ts              POST { cwd, message?, toolNames?, provider?, modelId?, thinkingLevel? }
+  agent/new/route.ts              POST { cwd, type, message?, toolNames?, provider?, modelId?, thinkingLevel? }
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
   agent/running/events/route.ts   GET SSE stream of currently-running session ids
@@ -55,7 +56,7 @@ app/api/
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
   auth/logout/[provider]/route.ts POST OAuth logout
   auth/providers/route.ts         GET OAuth provider list
-  cwd/browse/route.ts             POST browse/select cwd candidates
+  cwd/browse/route.ts             GET browse cwd candidates
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
   file-index/route.ts             GET project file index/search data
@@ -201,7 +202,7 @@ The npm CLI entrypoint (`bin/pi-web.js`) starts the Next app. The Terminal panel
 
 ### File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
-- `/api/cwd/validate`, `/api/cwd/browse`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
+- `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
 
 ### Plugins and skills
 - `/api/plugins` uses pi's `SettingsManager` + `DefaultPackageManager` for global/project package install, remove, update, enable, and disable. Disabling writes empty `extensions/skills/prompts/themes` arrays for that package entry.

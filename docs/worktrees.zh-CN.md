@@ -36,7 +36,7 @@ pi-web 会把 checkout 放在：
 <repo>-worktrees/<sanitized-branch>
 ```
 
-目录名会使用 sanitized branch name：斜杠、空白字符和文件系统不安全字符会被替换成 `-`。
+目录名会使用清理后的分支名：斜杠、空白字符和文件系统不安全字符会被替换成 `-`。
 
 例如 main checkout 是：
 

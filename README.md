@@ -2,7 +2,7 @@
 
 [中文文档](./README.zh-CN.md)
 
-Local web UI for the [pi coding agent](https://github.com/badlogic/pi-mono). pi-web reads your local pi session files and gives you a browser workspace for session browsing, real-time chat, model and runtime configuration, skill management, project trust, worktrees, terminal access, Git changes, and project file preview.
+Local web UI for the [pi coding agent](https://github.com/earendil-works/pi). pi-web reads your local pi session files and gives you a browser workspace for session browsing, real-time chat, model and runtime configuration, skill management, project trust, worktrees, terminal access, Git changes, and project file preview.
 
 ![Pi Web shows the same pi session with structured Markdown, tool calls, and project navigation beside the CLI](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
 
@@ -41,8 +41,8 @@ PORT=8080 pi-web                # environment variable is also supported
 - **Try different directions safely**: continue from an earlier message, fork a session into a separate route, or use `/tree` with labels, filters, search, and fold controls.
 - **Work across branches**: switch Git worktrees from the sidebar so new sessions and the Explorer follow the checkout you choose.
 - **Chat beside the project**: browse files on the left and preview source, docs, diffs, images, audio, PDFs, and DOCX files on the right while the agent works.
-- **See session state clearly**: context usage, cost, compaction state, thinking level, and system prompt details are visible from the top bar.
-- **Configure less from the terminal**: manage models, login/API keys, runtime settings, project trust, hotkeys, model tests, and skill switches from the web UI.
+- **See session state clearly**: context usage, cost, compaction state, and system prompt details are visible from the top bar; thinking level is available in the input controls.
+- **Configure less from the terminal**: manage models, login/API keys, runtime settings, project trust, model tests, and skill switches from the web UI; view keyboard shortcuts with `/hotkeys`.
 - **Run quick shell commands**: `!cmd` runs bash and includes output in model context; `!!cmd` shows output without adding it to context.
 - **Use richer extensions**: pi-web bridges extension dialogs, status/widgets, custom line UI, chrome, autocomplete providers, editor helpers, and theme compatibility.
 
@@ -54,6 +54,7 @@ PORT=8080 pi-web                # environment variable is also supported
 - **Runtime settings and trust**: `/settings` edits pi runtime settings separately from pi-web app settings. Project-scoped runtime settings and project-local resources are guarded by `/trust`.
 - **File access**: file browsing and preview are scoped to the selected project directory and working directories that appear in sessions.
 - **Git worktrees**: see [Worktrees in pi-web](./docs/worktrees.md) for when the switcher appears, how new worktrees are created, and what removal does.
+- **Terminal panel**: the default `pi-web` command starts the web app only. The Terminal panel requires a separate terminal server (`terminal-server.mjs`; local/dev: `npm run terminal`, default port 30142).
 - **Forks vs in-session branches**: Fork creates a new `.jsonl` file. "Edit from here" creates another branch inside the same session file.
 
 ## Development
