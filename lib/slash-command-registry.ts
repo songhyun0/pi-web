@@ -34,6 +34,7 @@ export type SlashUiAction =
   | { type: "openModelsConfig"; section?: "models" | "auth" | "scoped" }
   | { type: "openSettings" }
   | { type: "openProjectTrust" }
+  | { type: "openHotkeys" }
   | { type: "newSession" }
   | { type: "openSessionSidebar" }
 
@@ -48,7 +49,7 @@ export const WEB_BUILTIN_SLASH_COMMANDS: WebBuiltinSlashCommand[] = [
   { name: "name", description: "Set session display name", source: "builtin", mode: "agent", argHint: "<name>" },
   { name: "session", description: "Show session message, token, and cost stats", source: "builtin", mode: "client-ui" },
   { name: "changelog", description: "Show changelog entries", source: "builtin", mode: "unsupported" },
-  { name: "hotkeys", description: "Show all keyboard shortcuts", source: "builtin", mode: "unsupported" },
+  { name: "hotkeys", description: "Show all keyboard shortcuts", source: "builtin", mode: "client-ui" },
   { name: "fork", description: "Create a new fork from a previous user message", source: "builtin", mode: "client-ui" },
   { name: "clone", description: "Duplicate the current session at the current position", source: "builtin", mode: "agent" },
   { name: "tree", description: "Navigate session tree (switch branches)", source: "builtin", mode: "client-ui" },

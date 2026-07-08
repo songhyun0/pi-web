@@ -1671,6 +1671,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           await emitUiAction({ type: "openModelsConfig", section: "auth" });
           return complete({ handled: true, message: args ? `Opened auth settings for ${args}` : "Opened auth settings" });
 
+        case "hotkeys":
+          await emitUiAction({ type: "openHotkeys" });
+          return complete({ handled: true });
         default: {
           const command = getWebBuiltinSlashCommand(commandName);
           return complete({
