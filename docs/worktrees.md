@@ -33,8 +33,10 @@ Choose `New worktree...` from the worktree menu and enter a branch name.
 pi-web creates the checkout at:
 
 ```text
-<repo>-worktrees/<branch>
+<repo>-worktrees/<sanitized-branch>
 ```
+
+Branch names are sanitized for directory names: slashes, whitespace, and filesystem-unsafe characters are replaced with `-`.
 
 For example, if the main checkout is:
 
