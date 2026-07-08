@@ -84,6 +84,20 @@ export interface ToolResultMessage {
   timestamp?: number;
 }
 
+export interface BashExecutionMessage {
+  role: "bashExecution";
+  command: string;
+  output: string;
+  exitCode: number | undefined;
+  cancelled: boolean;
+  truncated: boolean;
+  fullOutputPath?: string;
+  timestamp?: number;
+  excludeFromContext?: boolean;
+  cwd?: string;
+  durationMs?: number;
+}
+
 export interface CustomMessage {
   role: "custom";
   customType: string;
@@ -93,7 +107,7 @@ export interface CustomMessage {
   timestamp?: number;
 }
 
-export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage | CustomMessage;
+export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage | BashExecutionMessage | CustomMessage;
 
 export type ExtensionUiRequest =
   | {

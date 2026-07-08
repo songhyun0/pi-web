@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import { parseUserBashCommand } from "@/lib/user-bash";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
@@ -121,6 +122,7 @@ type AgentStateResponse = {
   isStreaming?: boolean;
   isPromptRunning?: boolean;
   isCompacting?: boolean;
+  isBashRunning?: boolean;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
   extensionChrome?: ExtensionChromeState;
@@ -561,6 +563,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
+  const [userBashRunning, setUserBashRunning] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
@@ -579,6 +582,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
+  const userBashRunningRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -1190,7 +1194,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   useEffect(() => {
     agentRunningRef.current = agentRunning;
   }, [agentRunning]);
-
+  useEffect(() => {
+    userBashRunningRef.current = userBashRunning;
+  }, [userBashRunning]);
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "agent_start":
@@ -1343,6 +1349,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
+      case "user_bash_start":
+        userBashRunningRef.current = true;
+        agentRunningRef.current = true;
+        setUserBashRunning(true);
+        setAgentRunning(true);
+        setAgentPhase({ kind: "running_command" });
+        dispatch({ type: "start" });
+        break;
+      case "user_bash_end":
+        userBashRunningRef.current = false;
+        setUserBashRunning(false);
+        break;
       case "extension_ui_request":
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
@@ -1354,6 +1372,69 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunning) return;
+    if (images?.length && trimmedMessage.startsWith("!")) {
+      addNotice({ type: "error", message: "User bash commands cannot include image attachments." });
+      return;
+    }
+    const parsedUserBash = !images?.length ? parseUserBashCommand(message) : null;
+    if (parsedUserBash) {
+      if (!parsedUserBash.command) {
+        addNotice({ type: "error", message: `Usage: ${parsedUserBash.prefix}<command>` });
+        return;
+      }
+      const runId = promptRunIdRef.current + 1;
+      promptRunIdRef.current = runId;
+      agentRunningRef.current = true;
+      userBashRunningRef.current = true;
+      setAgentRunning(true);
+      setUserBashRunning(true);
+      setAgentPhase({ kind: "running_command" });
+      dispatch({ type: "start" });
+      pendingScrollToUserRef.current = true;
+      completionScrollAllowedRef.current = true;
+      try {
+        let sid: string | null = null;
+        if (isNew && newSessionCwd) {
+          sid = sessionIdRef.current ?? await ensuringNewSessionRef.current ?? await ensureNewSession();
+          if (sid) {
+            await ensureEventsConnected(sid);
+            promoteNewSession(1, `${parsedUserBash.prefix}${parsedUserBash.command}`);
+          }
+        } else if (session) {
+          sid = session.id;
+          await ensureEventsConnected(sid);
+        }
+        if (!sid) throw new Error("No active session for bash command");
+        const result = await sendAgentCommand<{ output: string; exitCode?: number; cancelled: boolean; truncated: boolean; fullOutputPath?: string; command?: string; cwd?: string; durationMs?: number; excludeFromContext?: boolean }>(sid, {
+          type: "user_bash",
+          command: parsedUserBash.command,
+          excludeFromContext: parsedUserBash.excludeFromContext,
+        });
+        await loadSession(sid, false, true);
+        setMessages((prev) => {
+          const next = [...prev];
+          for (let i = next.length - 1; i >= 0; i -= 1) {
+            if (next[i].role === "bashExecution" && (next[i] as { command?: string }).command === parsedUserBash.command) {
+              next[i] = { ...next[i], cwd: result?.cwd, durationMs: result?.durationMs } as AgentMessage;
+              break;
+            }
+          }
+          return next;
+        });
+      } catch (e) {
+        console.error("Failed to execute user bash:", e);
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      } finally {
+        userBashRunningRef.current = false;
+        agentRunningRef.current = false;
+        setUserBashRunning(false);
+        setAgentRunning(false);
+        setAgentPhase(null);
+        dispatch({ type: "end" });
+        onAgentEnd?.();
+      }
+      return;
+    }
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
     const promptRunId = promptRunIdRef.current + 1;
 
@@ -1432,13 +1513,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, agentRunning, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice]);
+  }, [isNew, newSessionCwd, newSessionModel, session, agentRunning, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, loadSession, onAgentEnd]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
     try {
-      await sendAgentCommand(sid, { type: "abort" });
+      await sendAgentCommand(sid, { type: userBashRunningRef.current ? "abort_bash" : "abort" });
     } catch (e) {
       console.error("Failed to abort:", e);
     }

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
+import { formatBashDuration } from "@/lib/user-bash";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { isEmptyThinkingBlock } from "@/lib/message-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
@@ -12,6 +13,7 @@ import type {
   AssistantMessage,
   CustomMessage,
   ToolResultMessage,
+  BashExecutionMessage,
   AssistantContentBlock,
   TextContent,
   ImageContent,
@@ -65,6 +67,9 @@ export function MessageView({ message, isStreaming, toolResults, modelNames, cwd
     // Rendered inline under its toolCall — skip standalone rendering if paired
     return null;
   }
+  if (message.role === "bashExecution") {
+    return <BashExecutionMessageView message={message as BashExecutionMessage} cwd={cwd} />;
+  }
   if (message.role === "custom") {
     const customMessage = message as CustomMessage;
     if (customMessage.customType === "compaction") {
@@ -74,6 +79,50 @@ export function MessageView({ message, isStreaming, toolResults, modelNames, cwd
   }
   return null;
 }
+function BashExecutionMessageView({ message, cwd }: { message: BashExecutionMessage; cwd?: string }) {
+  const [copied, setCopied] = useState(false);
+  const output = message.output || "(no output)";
+  const status = message.cancelled
+    ? "cancelled"
+    : message.exitCode === 0
+      ? "exit 0"
+      : message.exitCode === undefined
+        ? "no exit code"
+        : `exit ${message.exitCode}`;
+  const duration = formatBashDuration(message.durationMs);
+  const effectiveCwd = message.cwd ?? cwd;
+  const copyOutput = () => {
+    copyText(`$ ${message.command}\n${output}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-start" }}>
+      <div style={{ maxWidth: "86%", minWidth: 0, border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-panel)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 10px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>$ {message.command}</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
+              <span>{status}</span>
+              {duration && <span>{duration}</span>}
+              {effectiveCwd && <span title={effectiveCwd}>cwd: {effectiveCwd}</span>}
+              {message.excludeFromContext ? <span>excluded from context (!!)</span> : <span>included in context (!)</span>}
+              {message.truncated && <span>truncated</span>}
+            </div>
+          </div>
+          <button type="button" onClick={copyOutput} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "4px 7px", fontSize: 11, cursor: "pointer", flexShrink: 0 }}>{copied ? "Copied" : "Copy"}</button>
+        </div>
+        <pre style={{ margin: 0, padding: 10, maxHeight: 360, overflow: "auto", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.45, fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{output}</pre>
+        {message.truncated && message.fullOutputPath && (
+          <div style={{ padding: "0 10px 10px", color: "var(--warning)", fontSize: 11 }}>Full output: <code>{message.fullOutputPath}</code></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
   message: UserMessage;
