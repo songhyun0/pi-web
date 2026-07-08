@@ -3,7 +3,8 @@
 ## Quick Start
 
 ```bash
-npm run dev   # port 30141
+npm run dev        # web server on port 30141
+npm run terminal   # optional terminal server on port 30142 for TerminalPanel
 ```
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
@@ -43,53 +44,86 @@ app/api/
   sessions/[id]/route.ts          GET/PATCH/DELETE session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
-  agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
+  sessions/[id]/tree/route.ts     GET full tree | PATCH label changes
+  agent/new/route.ts              POST { cwd, type, message?, toolNames?, provider?, modelId?, thinkingLevel? }
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
   agent/running/events/route.ts   GET SSE stream of currently-running session ids
+  app-settings/route.ts           GET/PATCH pi-web app settings
+  app-settings/manifest/route.ts  GET app settings metadata
   auth/all-providers/route.ts     GET API-key provider list
   auth/api-key/[provider]/route.ts GET/POST/DELETE provider API key status/storage
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
   auth/logout/[provider]/route.ts POST OAuth logout
   auth/providers/route.ts         GET OAuth provider list
+  cwd/browse/route.ts             GET browse cwd candidates
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
+  file-index/route.ts             GET project file index/search data
   files/[...path]/route.ts        GET file contents for viewer
+  git/changes/route.ts            GET changed files for cwd
+  git/diff/route.ts               GET diff for a changed file
   home/route.ts                   GET user home directory
-  models/route.ts                 GET { models, modelList, defaultModel }
+  keybindings/route.ts            GET web keybinding registry
+  models/route.ts                 GET models, defaults, thinking levels/maps
   models-config/route.ts          GET/PUT — read/write ~/.pi/agent/models.json
   models-config/test/route.ts     POST test a configured model/provider
   plugins/route.ts                GET/POST package plugin management
+  project-trust/route.ts          GET trust status | POST trust/parent/deny/clear
+  runtime-settings/route.ts       GET/PATCH pi runtime settings
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  terminal/config/route.ts        GET terminal websocket/config defaults
+  terminal/font/route.ts          GET terminal font asset
+  terminal/wasm/route.ts          GET terminal wasm asset
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
   agent-client.ts      typed fetch helper for /api/agent commands
+  app-settings.ts      pi-web app settings descriptors
+  app-settings-store.ts pi-web app settings persistence
   draft-store.ts       local draft persistence helpers
+  extension-ui-bridge.ts browser compatibility bridge for extension UI APIs
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
+  git-changes.ts       Git status/diff helpers
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
-  rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
-  session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
-  tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
-  types.ts            shared TypeScript types
-  normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
-  worktree.ts         project/worktree resolution and git worktree operations
+  project-trust-core.ts trust inventory/effective state/actions
+  project-trust.ts     trust API client/types
+  rpc-manager.ts       AgentSessionWrapper + registry + startRpcSession
+  runtime-settings-core.ts runtime setting descriptors/read/write/validation
+  runtime-settings.ts  runtime setting API client/types
+  session-reader.ts    SessionManager wrappers + path cache + buildSessionContext adapter
+  session-tree-view.ts tree flatten/filter/search/fold/label utilities
+  slash-command-registry.ts web built-in slash command metadata
+  tool-presets.ts      PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
+  types.ts             shared TypeScript types
+  user-bash.ts         !/!! parser and formatting helpers
+  web-keybindings.ts   keybinding registry and event matcher
+  normalize.ts         normalizeToolCalls() — field name mismatch between file format and our types
+  worktree.ts          project/worktree resolution and git worktree operations
 
 components/
-  AppShell.tsx        layout + URL state + tab management
-  SessionSidebar.tsx  session tree + FileExplorer
+  AppShell.tsx        layout + URL state + tab/panel/modal management
+  SessionSidebar.tsx  session tree + FileExplorer + worktree switcher
   ChatWindow.tsx      chat composition + completion sound wrapper
-  ChatInput.tsx       input bar + model/thinking/tools/compact controls
-  MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
+  ChatInput.tsx       input bar + model/thinking/tools/compact/slash/user-bash controls
+  MessageView.tsx     renders messages, tool calls/results, bash execution
   BranchNavigator.tsx in-session branch switcher
+  SessionCommandModals.tsx /tree, /fork, session command modals
+  SettingsModal.tsx   runtime/app/integration settings hub
+  ProjectTrustModal.tsx /trust UI
+  HotkeysModal.tsx    /hotkeys UI
+  ExtensionUiHost.tsx extension UI dialogs/custom/status/widgets/chrome
+  GitChangesPanel.tsx Git changes panel
+  TerminalPanel.tsx   terminal panel client
+  DirectoryPickerModal.tsx cwd picker
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
-  ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom)
+  ModelsConfig.tsx    modal for editing models.json/auth
   PluginsConfig.tsx   modal for installed package plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
   FileExplorer.tsx    file tree inside sidebar
@@ -98,7 +132,7 @@ components/
   TabBar.tsx          tab bar (Chat + open file tabs)
 
 hooks/
-  useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
+  useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation/slash UI logic
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
@@ -121,7 +155,7 @@ hooks/
 
 ### Two kinds of branching — don't confuse them
 - **Fork** (Fork button on user message): creates a new independent `.jsonl` file. Shown as a child in the sidebar tree via `parentSession` header field.
-- **In-session branch** (Continue button / BranchNavigator): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
+- **In-session branch** (Continue button / BranchNavigator / `/tree`): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
 
 ### Session files can be fully rewritten
 `parentSession` in the header is **display metadata only** — has zero effect on chat content. Safe to `writeFileSync` the entire file (pi does this itself during migrations). Used when cascade-reparenting children on delete.
@@ -130,10 +164,20 @@ hooks/
 Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called in both `session-reader.ts` (file load) and `ChatWindow.handleAgentEvent()` (streaming).
 
 ### New session tool preset
-Tool names are passed at session creation (`POST /api/agent/new` → `toolNames[]`). For existing sessions, the active preset is inferred on mount via `get_tools` → `getPresetFromTools()`. When tools are fully disabled (`toolNames = []`), `rpc-manager.ts` passes an empty tool allow-list and forces `agent.state.systemPrompt = ""` after startup/reload/resource discovery.
+Tool names are passed at session creation (`POST /api/agent/new` → `toolNames[]`). `thinkingLevel` may also be passed for the new session. For existing sessions, the active preset is inferred on mount via `get_tools` → `getPresetFromTools()`. When tools are fully disabled (`toolNames = []`), `rpc-manager.ts` passes an empty tool allow-list and forces `agent.state.systemPrompt = ""` after startup/reload/resource discovery.
 
 ### Model defaults for new sessions
-`GET /api/models` returns `defaultModel` read from `~/.pi/agent/settings.json`. `ChatWindow` pre-selects this on mount for new sessions.
+`GET /api/models` returns `defaultModel`, `defaultThinkingLevel`, `thinkingLevels`, `thinkingLevelMaps`, and `openAIFastConfig` from pi config/settings. `ChatWindow` pre-selects these defaults on mount for new sessions.
+
+### Runtime settings and Project trust
+`/api/runtime-settings` exposes global/project/effective pi runtime settings. Project-scoped reads/writes are blocked until the project is trusted. `/api/project-trust` reports saved/effective trust, inventory, actions, and `defaultProjectTrust`; saved trust changes may require `/reload` or a new session for already-running sessions.
+
+### Slash commands, hotkeys, and user bash
+`lib/slash-command-registry.ts` handles web-supported built-ins. Unknown slash commands must still pass through to `AgentSession.prompt()` for extension commands, prompt templates, and skill commands. `/trust`, `/settings`, `/hotkeys`, and `/tree` are implemented web UI commands.
+Unsupported built-ins are `/import`, `/share`, `/changelog`, and `/quit`. `Ctrl+G` uses `chat.editor.external` for the fullscreen prompt editor. `!cmd` includes bash output in model context; `!!cmd` excludes it; `!!!cmd` is not a bash prefix.
+
+### Extension UI bridge
+`lib/extension-ui-bridge.ts` supports dialogs, status/widgets, custom line UI, chrome, autocomplete providers, editor text helpers, and degraded theme handling. `pi.registerShortcut()` is not implemented unless source support is added.
 
 ### SSE reconnect on page refresh mid-stream
 On `ChatWindow` mount, `GET /api/agent/[id]` is called. If `state.isStreaming === true`, SSE is reconnected automatically. `thinkingLevel` and `isCompacting` are also synced from this response.
@@ -152,6 +196,9 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - New worktrees are created under `<repoRoot>-worktrees/<sanitized-branch>`. Existing branches are reused; otherwise `git worktree add -b` creates the branch.
 - Removing a dirty worktree returns `409` with `{ dirty: true }` so the UI can ask before retrying with `force`.
 - Sessions whose cwd points at a removed worktree are inferred back into the main project instead of becoming a phantom project row.
+
+### Terminal panel
+The npm CLI entrypoint (`bin/pi-web.js`) starts the Next app. The Terminal panel expects `terminal-server.mjs` to be running separately in development (`npm run terminal`, default port 30142); local deployment starts both services.
 
 ### File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
