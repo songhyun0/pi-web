@@ -1644,11 +1644,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         case "fork":
           await emitUiAction({ type: "openForkSelector" });
           return complete({ handled: true });
-
         case "new":
           await emitUiAction({ type: "newSession" });
           return complete({ handled: true });
 
+        case "trust":
+          await emitUiAction({ type: "openProjectTrust" });
+          return complete({ handled: true });
         case "resume":
           await emitUiAction({ type: "openSessionSidebar" });
           return complete({ handled: true, message: "Opened session list" });
