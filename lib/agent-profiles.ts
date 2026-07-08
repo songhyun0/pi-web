@@ -1,9 +1,9 @@
 import { existsSync, realpathSync, statSync } from "fs";
 import path from "path";
 import { getAllowedFileRoots, isFilePathAllowed } from "./file-access";
-export * from "./runtime-settings-core";
+export * from "./agent-profiles-core";
 
-export async function validateRuntimeSettingsCwd(cwd: string): Promise<string> {
+export async function validateAgentProfilesCwd(cwd: string): Promise<string> {
   const resolvedCwd = path.resolve(cwd);
   if (!existsSync(resolvedCwd)) throw Object.assign(new Error(`Directory does not exist: ${resolvedCwd}`), { statusCode: 400 });
   const realCwd = realpathSync.native(resolvedCwd);

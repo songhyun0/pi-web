@@ -1471,6 +1471,7 @@ export function AppShell() {
         onOpenScopedModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
         onOpenAuth={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
         onOpenProjectTrust={() => { setSettingsOpen(false); setProjectTrustOpen(true); }}
+        onRuntimeSettingsChanged={() => setModelsRefreshKey((k) => k + 1)}
       />
     )}
     {projectTrustOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (

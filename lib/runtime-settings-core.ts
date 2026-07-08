@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, realpathSync, unlinkSync } from "fs";
 import path from "path";
+import { homedir } from "os";
 import {
   CONFIG_DIR_NAME,
   getAgentDir,
@@ -8,7 +9,7 @@ import {
   SettingsManager,
   type DefaultProjectTrust,
 } from "@earendil-works/pi-coding-agent";
-
+import { parseSettingsForLockedWrite, readJsonObject, withSettingsFileLock } from "./settings-file-core";
 export type RuntimeSettingsScope = "global" | "project";
 export type RuntimeSettingType = "boolean" | "number" | "string";
 export type RuntimeSettingApplies = "immediate" | "next-request" | "reload" | "new-session";
@@ -177,19 +178,6 @@ function getProjectSettingsPath(cwd: string): string {
   return path.join(path.resolve(cwd), CONFIG_DIR_NAME, "settings.json");
 }
 
-function readJsonObject(filePath: string): JsonObject {
-  if (!existsSync(filePath)) return {};
-  const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid settings file ${filePath}: expected an object`);
-  }
-  return parsed as JsonObject;
-}
-
-function writeJsonObject(filePath: string, value: JsonObject): void {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 
 function getNested(source: JsonObject, key: string): unknown {
   let current: unknown = source;
@@ -270,7 +258,9 @@ export function loadRuntimeSettings(cwd: string): RuntimeSettingsResponse {
   const projectPath = getProjectSettingsPath(resolvedCwd);
   const globalSettings = readJsonObject(globalPath);
   const trust = resolveProjectTrust(resolvedCwd, globalSettings);
-  const projectSettings = trust.trusted ? readJsonObject(projectPath) : {};
+  const projectSettingsReadable = trust.trusted && trust.source !== "none-required";
+  const projectSettingsWritable = trust.trusted;
+  const projectSettings = projectSettingsReadable ? readJsonObject(projectPath) : {};
 
   return {
     cwd: resolvedCwd,
@@ -281,14 +271,14 @@ export function loadRuntimeSettings(cwd: string): RuntimeSettingsResponse {
       global: { path: globalPath, writable: true },
       project: {
         path: projectPath,
-        writable: trust.trusted,
-        readable: trust.trusted,
-        ...(!trust.trusted ? { blockedReason: "Project settings are ignored until the project is trusted." } : {}),
+        writable: projectSettingsWritable,
+        readable: projectSettingsReadable,
+        ...(!projectSettingsWritable ? { blockedReason: "Project settings are ignored until the project is trusted." } : {}),
       },
     },
     settings: DESCRIPTORS.map((descriptor) => {
       const globalValue = getNested(globalSettings, descriptor.key);
-      const projectValue = trust.trusted && descriptor.scopes.includes("project")
+      const projectValue = projectSettingsReadable && descriptor.scopes.includes("project")
         ? getNested(projectSettings, descriptor.key)
         : undefined;
       const hasProjectValue = projectValue !== undefined;
@@ -302,10 +292,64 @@ export function loadRuntimeSettings(cwd: string): RuntimeSettingsResponse {
         projectValue,
         effectiveValue: hasProjectValue ? projectValue : hasGlobalValue ? globalValue : descriptor.defaultValue,
         effectiveScope,
-        ...(!trust.trusted && descriptor.scopes.includes("project") ? { projectBlocked: true } : {}),
+        ...(!projectSettingsWritable && descriptor.scopes.includes("project") ? { projectBlocked: true } : {}),
       };
     }),
   };
+}
+
+const RUNTIME_SETTING_TOP_LEVEL_KEYS = new Set(DESCRIPTORS.map((descriptor) => descriptor.key.split(".")[0]));
+
+function pathHasTrustResource(target: string): boolean {
+  return existsSync(target);
+}
+
+function canonicalRootPath(target: string): string {
+  try {
+    return realpathSync.native(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+function collectUnexpectedProjectRuntimeTrustResources(cwd: string): { label: string }[] {
+  const piDir = path.join(cwd, CONFIG_DIR_NAME);
+  const candidates = [
+    { label: `${CONFIG_DIR_NAME}/extensions`, path: path.join(piDir, "extensions") },
+    { label: `${CONFIG_DIR_NAME}/skills`, path: path.join(piDir, "skills") },
+    { label: `${CONFIG_DIR_NAME}/prompts`, path: path.join(piDir, "prompts") },
+    { label: `${CONFIG_DIR_NAME}/themes`, path: path.join(piDir, "themes") },
+    { label: `${CONFIG_DIR_NAME}/SYSTEM.md`, path: path.join(piDir, "SYSTEM.md") },
+    { label: `${CONFIG_DIR_NAME}/APPEND_SYSTEM.md`, path: path.join(piDir, "APPEND_SYSTEM.md") },
+  ];
+  const resources = candidates.filter((candidate) => pathHasTrustResource(candidate.path)).map(({ label }) => ({ label }));
+  const homeAgentsSkillsDir = path.join(canonicalRootPath(homedir()), ".agents", "skills");
+  let current = canonicalRootPath(cwd);
+  while (true) {
+    const agentsSkills = path.join(current, ".agents", "skills");
+    if (path.resolve(agentsSkills) !== homeAgentsSkillsDir && pathHasTrustResource(agentsSkills)) resources.push({ label: ".agents/skills" });
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return resources;
+}
+
+function promoteCleanProjectRuntimeSettingsTrust(before: RuntimeSettingsResponse, settingsPath: string, expectedSettingsJson: string): void {
+  if (before.projectTrustSource !== "none-required") return;
+  const currentSettings = readJsonObject(settingsPath);
+  if (JSON.stringify(currentSettings) !== expectedSettingsJson) {
+    throw Object.assign(new Error("Runtime settings changed while saving; reload and try again."), { statusCode: 409 });
+  }
+  const unexpectedSettingsKeys = Object.keys(currentSettings).filter((key) => !RUNTIME_SETTING_TOP_LEVEL_KEYS.has(key));
+  if (unexpectedSettingsKeys.length > 0) {
+    throw Object.assign(new Error(`Project settings changed while saving runtime settings: ${unexpectedSettingsKeys.join(", ")}. Review project trust and try again.`), { statusCode: 409 });
+  }
+  const unexpectedTrustRequirements = collectUnexpectedProjectRuntimeTrustResources(before.cwd);
+  if (unexpectedTrustRequirements.length > 0) {
+    throw Object.assign(new Error(`Project trust requirements changed while saving runtime settings: ${unexpectedTrustRequirements.map((item) => item.label).join(", ")}. Review project trust and try again.`), { statusCode: 409 });
+  }
+  new ProjectTrustStore(before.agentDir).set(before.cwd, true);
 }
 
 export function patchRuntimeSettings(
@@ -315,11 +359,12 @@ export function patchRuntimeSettings(
 ): RuntimeSettingsPatchResult {
   const resolvedCwd = path.resolve(cwd);
   const before = loadRuntimeSettings(resolvedCwd);
-  if (scope === "project" && !before.projectTrusted) {
-    throw Object.assign(new Error("Project settings cannot be changed until the project is trusted."), { statusCode: 403 });
+  if (scope === "project" && !before.scopes.project.writable) {
+    throw Object.assign(new Error(before.scopes.project.blockedReason ?? "Project settings cannot be changed until the project is trusted."), { statusCode: 403 });
   }
   const settingsPath = scope === "global" ? before.scopes.global.path : before.scopes.project.path;
   const settings = readJsonObject(settingsPath);
+  const originalSettingsJson = JSON.stringify(settings);
   const changed: string[] = [];
   const reset: string[] = [];
 
@@ -336,6 +381,28 @@ export function patchRuntimeSettings(
     changed.push(key);
   }
 
-  writeJsonObject(settingsPath, settings);
+  const settingsRoot = scope === "global" ? before.agentDir : before.cwd;
+  const nextSettingsJson = JSON.stringify(settings);
+  const settingsExistedBeforeWrite = existsSync(settingsPath);
+  withSettingsFileLock(settingsPath, settingsRoot, (current) => {
+    const currentSettings = parseSettingsForLockedWrite(current, settingsPath);
+    if (JSON.stringify(currentSettings) !== originalSettingsJson) {
+      throw Object.assign(new Error("Runtime settings changed while editing; reload and try again."), { statusCode: 409 });
+    }
+    return {
+      content: `${JSON.stringify(settings, null, 2)}\n`,
+      afterWrite: () => {
+        if (scope !== "project") return;
+        try {
+          promoteCleanProjectRuntimeSettingsTrust(before, settingsPath, nextSettingsJson);
+        } catch (error) {
+          if (before.projectTrustSource === "none-required" && !settingsExistedBeforeWrite) {
+            try { unlinkSync(settingsPath); } catch { /* best-effort rollback of untrusted first-write settings */ }
+          }
+          throw error;
+        }
+      },
+    };
+  });
   return { ...loadRuntimeSettings(resolvedCwd), changed, reset };
 }

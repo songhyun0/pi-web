@@ -10,15 +10,15 @@ import {
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
 import { getPiCodexFastModeState, loadPiCodexFastModeConfig } from "@/lib/pi-codex-fast";
-
+import { isProfileStateEntry, stripProfileStateNodes, visibleProfileLeafId } from "@/lib/profile-session-state";
+import { expandAgentProfileForNewSession, normalizeAgentProfileRef, resolveAgentProfile } from "@/lib/agent-profiles";
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
 
 /**
  * Project the session tree into the shallow navigation tree sent to the client.
  * Keeps roots, branch points, and leaves while contracting single-child chains
- * without recursive traversal. Contracted entry IDs are attached to the next
- * visible node so the UI can still recognize an active leaf inside the chain.
+ * without recursive traversal.
  */
 function projectTreeForResponse<T extends { entry: { id: string }; children: T[]; compressedEntryIds?: string[] }>(
   nodes: T[]
@@ -124,8 +124,9 @@ export async function GET(
 
     const sm = SessionManager.open(filePath);
     const entries = sm.getEntries() as never;
-    const leafId = sm.getLeafId();
-    const tree = projectTreeForResponse(sm.getTree());
+    const rawLeafId = sm.getLeafId();
+    const leafId = visibleProfileLeafId(sm, rawLeafId);
+    const tree = projectTreeForResponse(stripProfileStateNodes(sm.getTree()));
     const context = buildSessionContext(entries, leafId);
 
     const header = sm.getHeader();
@@ -151,6 +152,30 @@ export async function GET(
       parentSessionId,
     } : null;
 
+    const persistedProfileEntry = [...sm.getEntries()].reverse().find(isProfileStateEntry);
+    const persistedProfileData = persistedProfileEntry && "data" in persistedProfileEntry && typeof persistedProfileEntry.data === "object" && persistedProfileEntry.data !== null
+      ? persistedProfileEntry.data as { profileRef?: unknown; profileName?: unknown; modelOverride?: unknown; thinkingOverride?: unknown }
+      : undefined;
+    const persistedProfile = typeof persistedProfileData?.profileRef === "string"
+      ? { ref: persistedProfileData.profileRef, name: typeof persistedProfileData.profileName === "string" ? persistedProfileData.profileName : persistedProfileData.profileRef }
+      : null;
+    let persistedProfileModel: { id: string; provider: string } | undefined;
+    let persistedProfileThinkingLevel: string | undefined;
+    const persistedProfileRef = normalizeAgentProfileRef(persistedProfileData?.profileRef);
+    if (persistedProfileRef && header?.cwd) {
+      try {
+        const profile = expandAgentProfileForNewSession(header.cwd, resolveAgentProfile(header.cwd, persistedProfileRef));
+        if (persistedProfileData?.modelOverride !== true && profile.provider && profile.modelId) {
+          persistedProfileModel = { provider: profile.provider, id: profile.modelId };
+        }
+        if (persistedProfileData?.thinkingOverride !== true && profile.thinkingLevel) {
+          persistedProfileThinkingLevel = profile.thinkingLevel;
+        }
+      } catch (error) {
+        console.warn("[pi-web] failed to resolve persisted profile state", error instanceof Error ? error.message : String(error));
+      }
+    }
+
     const url = new URL(req.url);
     let agentState: { running: boolean; state?: unknown } | undefined;
     if (url.searchParams.has("includeState")) {
@@ -162,6 +187,9 @@ export async function GET(
         agentState = {
           running: false,
           state: {
+            profile: persistedProfile,
+            ...(persistedProfileModel ? { model: persistedProfileModel } : {}),
+            ...(persistedProfileThinkingLevel ? { thinkingLevel: persistedProfileThinkingLevel } : {}),
             extensionStatuses: [],
             extensionWidgets: [],
             queuedMessages: { steering: [], followUp: [] },

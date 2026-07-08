@@ -16,7 +16,7 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { parseUserBashCommand } from "@/lib/user-bash";
-import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
+import type { AgentProfileRef, AgentProfilesResponse } from "@/lib/api-types";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
   getWebBuiltinSlashCommand,
@@ -117,6 +117,7 @@ type OpenAIFastToggleResponse = {
 
 type AgentStateResponse = {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
+  model?: { id: string; provider: string } | null;
   systemPrompt?: string;
   thinkingLevel?: string;
   isStreaming?: boolean;
@@ -129,6 +130,7 @@ type AgentStateResponse = {
   extensionCompatibility?: ExtensionCompatibilityItem[];
   extensionAutocompleteProviders?: ExtensionAutocompleteProviderState[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
+  profile?: { ref: AgentProfileRef; name: string } | null;
   openAIFastMode?: OpenAIFastModeState;
   openAIFastConfig?: OpenAIFastModeConfigState;
 };
@@ -246,7 +248,6 @@ export interface UseAgentSessionOptions {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsPanelOpen?: () => void;
   onSlashUiAction?: (action: SlashUiAction) => void | Promise<void>;
-  setToolPreset?: (preset: "none" | "default" | "full") => void;
 }
 
 export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -264,10 +265,9 @@ const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space", "Spacebar"]);
 const TOOL_PRESET_STORAGE_KEY = "pi-web-default-tool-preset";
+const PROFILE_STORAGE_KEY = "pi-web-default-profile-ref";
 const THINKING_LEVEL_STORAGE_KEY = "pi-web-default-thinking-level";
-const FALLBACK_TOOL_PRESET: "none" | "default" | "full" = "full";
 const FALLBACK_THINKING_LEVEL: ThinkingLevelOption = "xhigh";
-const TOOL_PRESET_VALUES = new Set(["none", "default", "full"]);
 const THINKING_LEVEL_VALUES = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh"]);
 
 function readLocalStorageValue(key: string): string | null {
@@ -287,12 +287,42 @@ function writeLocalStorageValue(key: string, value: string): void {
     // Ignore storage failures (private windows, denied storage, etc.).
   }
 }
-
-function readStoredToolPreset(): "none" | "default" | "full" {
-  const value = readLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
-  return TOOL_PRESET_VALUES.has(value ?? "") ? value as "none" | "default" | "full" : FALLBACK_TOOL_PRESET;
+function removeLocalStorageValue(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures (private windows, denied storage, etc.).
+  }
 }
 
+type StoredProfileSelection = { ref: AgentProfileRef; source: "profile" | "legacy" };
+
+function isStoredProfileRef(value: string | null): value is AgentProfileRef {
+  return Boolean(value?.startsWith("builtin:") || value?.startsWith("global:") || value?.startsWith("project:"));
+}
+
+function legacyPresetProfileRef(value: string | null): AgentProfileRef | undefined {
+  if (value === "none") return "builtin:no-tools";
+  if (value === "default") return "builtin:default";
+  if (value === "full") return "builtin:full";
+  return undefined;
+}
+
+function readStoredProfileSelection(): StoredProfileSelection | undefined {
+  const value = readLocalStorageValue(PROFILE_STORAGE_KEY);
+  if (isStoredProfileRef(value)) {
+    removeLocalStorageValue(PROFILE_STORAGE_KEY);
+    removeLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
+    return { ref: value, source: "profile" };
+  }
+  const legacyRef = legacyPresetProfileRef(readLocalStorageValue(TOOL_PRESET_STORAGE_KEY));
+  if (legacyRef) {
+    removeLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
+    return { ref: legacyRef, source: "legacy" };
+  }
+  return undefined;
+}
 function readStoredThinkingLevel(): ThinkingLevelOption {
   const value = readLocalStorageValue(THINKING_LEVEL_STORAGE_KEY);
   return THINKING_LEVEL_VALUES.has(value ?? "") ? value as ThinkingLevelOption : FALLBACK_THINKING_LEVEL;
@@ -421,6 +451,65 @@ function userMessageKey(message: Partial<AgentMessage>): string {
   });
 }
 
+type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+function assistantBlockSignature(block: unknown): string {
+  if (!block || typeof block !== "object") return "";
+  const b = block as {
+    type?: unknown;
+    text?: unknown;
+    thinking?: unknown;
+    toolCallId?: unknown;
+    toolName?: unknown;
+    input?: unknown;
+    id?: unknown;
+    name?: unknown;
+    arguments?: unknown;
+  };
+  if (b.type === "text") return typeof b.text === "string" ? b.text : "";
+  if (b.type === "thinking") return typeof b.thinking === "string" ? b.thinking : "";
+  if (b.type === "toolCall") {
+    return JSON.stringify({
+      id: typeof b.toolCallId === "string" ? b.toolCallId : typeof b.id === "string" ? b.id : "",
+      name: typeof b.toolName === "string" ? b.toolName : typeof b.name === "string" ? b.name : "",
+      input: b.input ?? b.arguments ?? null,
+    });
+  }
+  return "";
+}
+
+function assistantMessageSignature(message: Partial<AgentMessage>): string {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return "";
+  return content.map(assistantBlockSignature).filter(Boolean).join("\n");
+}
+
+function hasDisplayableAssistantContent(content: unknown): content is AssistantAgentMessage["content"] {
+  return Array.isArray(content) && content.some((block) => assistantBlockSignature(block).trim().length > 0);
+}
+
+function materializeStreamingAssistant(snapshot: Partial<AgentMessage> | null): AgentMessage | null {
+  if (!snapshot || snapshot.role !== "assistant") return null;
+  const assistant = snapshot as Partial<AssistantAgentMessage>;
+  if (!hasDisplayableAssistantContent(assistant.content)) return null;
+  return normalizeToolCalls({
+    ...assistant,
+    role: "assistant",
+    content: assistant.content,
+    model: typeof assistant.model === "string" ? assistant.model : "",
+    provider: typeof assistant.provider === "string" ? assistant.provider : "",
+    timestamp: typeof assistant.timestamp === "number" ? assistant.timestamp : Date.now(),
+    stopReason: typeof assistant.stopReason === "string" ? assistant.stopReason : "aborted",
+  } as AssistantAgentMessage);
+}
+
+function messageIncludesStreamingAssistant(message: AgentMessage, partial: AgentMessage): boolean {
+  if (message.role !== "assistant" || partial.role !== "assistant") return false;
+  const existingSignature = assistantMessageSignature(message);
+  const partialSignature = assistantMessageSignature(partial);
+  return !!partialSignature && (existingSignature === partialSignature || existingSignature.startsWith(partialSignature));
+}
+
 function readCompactResult(result: unknown, reason: string): CompactResultInfo | null {
   if (!result || typeof result !== "object") return null;
   const r = result as CompactCommandResult;
@@ -543,7 +632,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [entryIds, setEntryIds] = useState<string[]>([]);
-  const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
+  const [streamState, rawDispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
   const [agentRunning, setAgentRunning] = useState(false);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
   const [modelList, setModelList] = useState<ModelEntry[]>([]);
@@ -551,8 +640,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
-  const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(() => readStoredToolPreset());
+  const [profilesResponse, setProfilesResponse] = useState<AgentProfilesResponse | null>(null);
+  const [profilesRefreshKey, setProfilesRefreshKey] = useState(0);
+  const initialProfileSelectionSourceRef = useRef<StoredProfileSelection["source"] | null>(null);
+  const profileStorageCheckedRef = useRef(false);
+  const newSessionProfileOverrideRef = useRef(false);
+  const [activeProfileRef, setActiveProfileRef] = useState<AgentProfileRef | undefined>(() => {
+    if (!isNew) return undefined;
+    profileStorageCheckedRef.current = true;
+    const selection = readStoredProfileSelection();
+    initialProfileSelectionSourceRef.current = selection?.source ?? null;
+    return selection?.ref;
+  });
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(() => readStoredThinkingLevel());
+  const [newSessionDefaultThinkingLevel, setNewSessionDefaultThinkingLevel] = useState<ThinkingLevelOption>(FALLBACK_THINKING_LEVEL);
+  const [profileSwitchSupported, setProfileSwitchSupported] = useState(isNew);
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -596,18 +698,98 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const streamingMessageRef = useRef<Partial<AgentMessage> | null>(null);
   const liveContextUsageRefreshInFlightRef = useRef(false);
   const lastLiveContextUsageRefreshAtRef = useRef(0);
   const pendingLiveContextUsageRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const newSessionThinkingOverrideRef = useRef(false);
+  const runtimeProfileMissingRef = useRef(false);
+  const dispatch = useCallback((action: StreamAction) => {
+    if (action.type === "update") streamingMessageRef.current = action.message;
+    else streamingMessageRef.current = null;
+    rawDispatch(action);
+  }, [rawDispatch]);
 
-  const setToolPresetState = opts.setToolPreset ?? setToolPreset;
+  const preserveStreamingMessage = useCallback((snapshot: Partial<AgentMessage> | null = streamingMessageRef.current) => {
+    const preserved = materializeStreamingAssistant(snapshot);
+    if (!preserved) return;
+    setMessages((prev) => prev.some((message) => messageIncludesStreamingAssistant(message, preserved))
+      ? prev
+      : [...prev, preserved]);
+  }, []);
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
-  const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  const profileCwd = newSessionCwd ?? session?.cwd ?? null;
+  const activeProfile = profilesResponse?.profiles.find((profile) => profile.ref === activeProfileRef) ?? null;
+  const activeProfileModel = activeProfile?.model ? { provider: activeProfile.model.provider, modelId: activeProfile.model.modelId } : null;
+  const displayModel = isNew ? (newSessionModel ?? activeProfileModel ?? newSessionDefaultModel) : currentModel;
+  const profileOptions = profilesResponse?.profiles ?? [];
   const derivedOpenAIFastMode = deriveOpenAIFastModeState(displayModel, openAIFastConfig);
   const openAIFastMode = openAIFastModeState && sameSelectedModel(openAIFastModeState.model, displayModel)
     ? openAIFastModeState
     : derivedOpenAIFastMode;
+  useEffect(() => {
+    if (!isNew || newSessionThinkingOverrideRef.current) return;
+    const profileThinkingLevel = activeProfile?.thinkingLevel as ThinkingLevelOption | undefined;
+    if (profileThinkingLevel && profileThinkingLevel !== "auto") {
+      setThinkingLevel(profileThinkingLevel);
+      return;
+    }
+    setThinkingLevel(hasStoredThinkingLevel() ? readStoredThinkingLevel() : newSessionDefaultThinkingLevel);
+  }, [isNew, activeProfile?.thinkingLevel, newSessionDefaultThinkingLevel]);
+
+  useEffect(() => {
+    if (!profileCwd) return;
+    const handleProfilesChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ cwd?: string }>).detail;
+      if (!detail?.cwd || detail.cwd === profileCwd) setProfilesRefreshKey((key) => key + 1);
+    };
+    window.addEventListener("pi-web-profiles-changed", handleProfilesChanged);
+    return () => window.removeEventListener("pi-web-profiles-changed", handleProfilesChanged);
+  }, [profileCwd]);
+
+  useEffect(() => {
+    if (!isNew || profileStorageCheckedRef.current) return;
+    profileStorageCheckedRef.current = true;
+    const selection = readStoredProfileSelection();
+    initialProfileSelectionSourceRef.current = selection?.source ?? null;
+    if (selection) setActiveProfileRef(selection.ref);
+  }, [isNew]);
+
+  useEffect(() => {
+    if (!profileCwd) {
+      setProfilesResponse(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/profiles?cwd=${encodeURIComponent(profileCwd)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as AgentProfilesResponse;
+        if (cancelled) return;
+        setProfilesResponse(data);
+        setActiveProfileRef((current) => {
+          if (runtimeProfileMissingRef.current) return undefined;
+          const currentExists = current && data.profiles.some((profile) => profile.ref === current);
+          if (isNew) {
+            if (newSessionProfileOverrideRef.current) return currentExists ? current : data.effectiveDefaultProfileRef;
+            if (initialProfileSelectionSourceRef.current) {
+              initialProfileSelectionSourceRef.current = null;
+              if (currentExists) return current;
+            }
+            return data.effectiveDefaultProfileRef;
+          }
+          if (currentExists) return current;
+          if (session && current) return current;
+          return data.effectiveDefaultProfileRef;
+        });
+      } catch (error) {
+        if (!cancelled) console.error("Failed to load profiles:", error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [profileCwd, session, isNew, profilesRefreshKey]);
 
   const applyContextUsage = useCallback((usage: AgentStateResponse["contextUsage"]) => {
     const nextUsage = usage ?? null;
@@ -696,7 +878,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const liveState = d.agentState?.state;
       if (liveState) {
         applyContextUsageFromState(liveState);
-        applyOpenAIFastFromState(liveState);
+        if (liveState.model) setCurrentModelOverride({ provider: liveState.model.provider, modelId: liveState.model.id });
+        if (liveState.profile !== undefined) {
+          setProfileSwitchSupported(true);
+          if (liveState.profile?.ref) {
+            runtimeProfileMissingRef.current = false;
+            setActiveProfileRef(liveState.profile.ref);
+          } else {
+            runtimeProfileMissingRef.current = true;
+            setActiveProfileRef(undefined);
+          }
+        }
         if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
         if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
         applyExtensionUiFromState(liveState);
@@ -714,7 +906,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState]);
+  }, [applyContextUsageFromState, applyExtensionUiFromState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -731,17 +923,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  const loadTools = useCallback(async (sid: string) => {
-    try {
-      const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
-      if (tools) {
-        const { getPresetFromTools } = await import("@/lib/tool-presets");
-        setToolPresetState(getPresetFromTools(tools));
-      }
-    } catch (e) {
-      console.error("Failed to load tools:", e);
-    }
-  }, [setToolPresetState]);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
@@ -765,18 +946,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (ensuringNewSessionRef.current) return ensuringNewSessionRef.current;
 
     const promise = (async () => {
-      const selectedModel = newSessionModel ?? newSessionDefaultModel;
+      const selectedModel = newSessionModel;
       if (selectedModel) setPendingModel(selectedModel);
-      const toolNames = getToolNamesForPreset(toolPreset);
+      const isKnownBuiltInProfile = activeProfileRef === "builtin:no-tools" || activeProfileRef === "builtin:default" || activeProfileRef === "builtin:full";
+      if (activeProfileRef && !isKnownBuiltInProfile && !profilesResponse) throw new Error("Profiles are still loading; try again in a moment.");
+      const profileRef = activeProfileRef && (isKnownBuiltInProfile || profilesResponse?.profiles.some((profile) => profile.ref === activeProfileRef))
+        ? activeProfileRef
+        : profilesResponse?.effectiveDefaultProfileRef;
+      const profileThinkingLevel = activeProfile?.thinkingLevel as ThinkingLevelOption | undefined;
+      const shouldSendThinkingLevel = newSessionThinkingOverrideRef.current
+        || (hasStoredThinkingLevel() && (!profileThinkingLevel || profileThinkingLevel === "auto"));
       const res = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cwd: newSessionCwd,
           type: "ensure_session",
-          toolNames,
+          ...(profileRef ? { profileRef } : {}),
           ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
-          ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
+          ...(shouldSendThinkingLevel ? { thinkingLevel } : {}),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -792,7 +980,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
+  }, [isNew, newSessionCwd, newSessionModel, activeProfileRef, activeProfile?.thinkingLevel, profilesResponse, thinkingLevel]);
 
   const loadSlashCommands = useCallback(async () => {
     const sid = sessionIdRef.current ?? await ensureNewSession();
@@ -1030,8 +1218,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Bail out before loadSession too: a stale finish for a previous run
     // must not overwrite the messages of the run currently streaming.
     if (runId !== undefined && promptRunIdRef.current !== runId) return;
+    const streamingSnapshot = streamingMessageRef.current;
     try {
       if (sid) await loadSession(sid, false, true);
+      if (runId !== undefined && promptRunIdRef.current !== runId) return;
+      preserveStreamingMessage(streamingSnapshot);
     } finally {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       optimisticUserMessageKeyRef.current = null;
@@ -1044,7 +1235,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
       onAgentEnd?.();
     }
-  }, [loadSession, onAgentEnd]);
+  }, [dispatch, loadSession, onAgentEnd, preserveStreamingMessage]);
 
   const waitForPromptSettlement = useCallback(async (sid: string, runId?: number) => {
     await delay(PROMPT_SETTLE_INITIAL_DELAY_MS);
@@ -1206,32 +1397,41 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         dispatch({ type: "start" });
         requestLiveContextUsageRefresh({ immediate: true });
         break;
-      case "agent_end":
+      case "agent_end": {
         // A late agent_end can arrive over SSE after reconcileAgentState
         // already finished this run — don't re-trigger completion.
         if (!agentRunningRef.current) break;
+        const streamingSnapshot = streamingMessageRef.current;
         agentRunningRef.current = false;
         setAgentRunning(false);
         setAgentPhase(null);
         setRetryInfo(null);
         setIsCompacting(false);
         dispatch({ type: "end" });
-        if (sessionIdRef.current) {
-          loadSession(sessionIdRef.current);
-          fetch(`/api/agent/${encodeURIComponent(sessionIdRef.current)}`)
-            .then((r) => r.json())
-            .then((d: { state?: AgentStateResponse }) => {
+        const sid = sessionIdRef.current;
+        if (sid) {
+          void (async () => {
+            await loadSession(sid);
+            preserveStreamingMessage(streamingSnapshot);
+            try {
+              const r = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+              const d = await r.json() as { state?: AgentStateResponse };
               applyContextUsageFromState(d.state);
               applyOpenAIFastFromState(d.state);
               applyExtensionUiFromState(d.state);
               // Aborted turns can leave messages queued in pi (delivered with the
               // next turn); dead wrapper (no state) means the queue is gone.
               setQueuedMessages(normalizeQueuedMessages(d.state?.queuedMessages));
-            })
-            .catch(() => {});
+            } catch {
+              // Best-effort post-run state refresh.
+            }
+          })();
+        } else {
+          preserveStreamingMessage(streamingSnapshot);
         }
         onAgentEnd?.();
         break;
+      }
       case "prompt_done":
         if (!agentRunningRef.current) break;
         void finishPromptWithoutStream(sessionIdRef.current);
@@ -1365,7 +1565,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
+  }, [addNotice, applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, dispatch, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, preserveStreamingMessage, requestLiveContextUsageRefresh]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1461,18 +1661,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       let sentSessionId: string | null = null;
       if (isNew && newSessionCwd) {
-        const selectedModel = newSessionModel;
         const existingSid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
         const sid = existingSid ?? await ensureNewSession();
 
         if (sid) {
           sentSessionId = sid;
-          if (selectedModel) {
-            setPendingModel(selectedModel);
-            if (existingSid) {
-              await sendAgentCommand(sid, { type: "set_model", provider: selectedModel.provider, modelId: selectedModel.modelId });
-            }
-          }
+          // A draft session may already have applied a later model/profile change.
+          // Do not replay stale newSessionModel on the first prompt.
           await ensureEventsConnected(sid);
           await sendAgentCommand(sid, {
             type: "prompt",
@@ -1513,7 +1708,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, agentRunning, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, loadSession, onAgentEnd]);
+  }, [isNew, newSessionCwd, session, agentRunning, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, dispatch, loadSession, onAgentEnd]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1655,8 +1850,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : undefined;
       const displayModel = match ?? nextModelList[0];
       setNewSessionDefaultModel(displayModel ? { provider: displayModel.provider, modelId: displayModel.id } : null);
-      if (!hasStoredThinkingLevel() && d.defaultThinkingLevel && THINKING_LEVEL_VALUES.has(d.defaultThinkingLevel)) {
-        setThinkingLevel(d.defaultThinkingLevel);
+      const defaultThinkingLevel = d.defaultThinkingLevel && THINKING_LEVEL_VALUES.has(d.defaultThinkingLevel)
+        ? d.defaultThinkingLevel as ThinkingLevelOption
+        : FALLBACK_THINKING_LEVEL;
+      setNewSessionDefaultThinkingLevel(defaultThinkingLevel);
+      if (!hasStoredThinkingLevel()) {
+        setThinkingLevel(defaultThinkingLevel);
       }
     }
   }, [isNew, newSessionCwd, session?.cwd]);
@@ -1748,7 +1947,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           await sendAgentCommand(sid, { type: "reload" });
           await Promise.all([
             loadSession(sid, false, true),
-            loadTools(sid),
             loadSlashCommands(),
             loadModels(),
           ]);
@@ -1846,7 +2044,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (didStartCompact) setIsCompacting(false);
     }
-  }, [addNotice, ensureNewSession, handleModelChange, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, modelList, onSessionForked, onSessionStatsPanelOpen, onSlashUiAction, promoteNewSession, slashCommands]);
+  }, [addNotice, ensureNewSession, handleModelChange, isCompacting, loadModels, loadSession, loadSlashCommands, modelList, onSessionForked, onSessionStatsPanelOpen, onSlashUiAction, promoteNewSession, slashCommands]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An
@@ -1931,9 +2129,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [opts.chatInputRef, addNotice]);
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
+    if (isNew && !sessionIdRef.current) newSessionThinkingOverrideRef.current = true;
     setThinkingLevel(level);
     writeLocalStorageValue(THINKING_LEVEL_STORAGE_KEY, level);
-    if (level === "auto") return; // "auto" leaves pi's current setting untouched
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (!sid) return;
     try {
@@ -1941,20 +2139,39 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to set thinking level:", e);
     }
-  }, []);
-
-  const handleToolPresetChange = useCallback(async (preset: "none" | "default" | "full") => {
-    const toolNames = getToolNamesForPreset(preset);
-    setToolPresetState(preset);
-    writeLocalStorageValue(TOOL_PRESET_STORAGE_KEY, preset);
-    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-    if (!sid) return;
-    try {
-      await sendAgentCommand(sid, { type: "set_tools", toolNames });
-    } catch (e) {
-      console.error("Failed to set tools:", e);
+  }, [isNew]);
+  const handleProfileChange = useCallback(async (profileRef: AgentProfileRef) => {
+    const previous = activeProfileRef;
+    const previousNewSessionModel = newSessionModel;
+    setNewSessionModel(null);
+    let sid = sessionIdRef.current;
+    if (!sid && ensuringNewSessionRef.current) {
+      try {
+        sid = await ensuringNewSessionRef.current;
+      } catch {
+        sid = null;
+      }
     }
-  }, [setToolPresetState]);
+    if (!sid) {
+      runtimeProfileMissingRef.current = false;
+      if (isNew) newSessionProfileOverrideRef.current = true;
+      setActiveProfileRef(profileRef);
+      return;
+    }
+    try {
+      const result = await sendAgentCommand<{ profileRef?: AgentProfileRef; profileName?: string }>(sid, { type: "set_profile", profileRef });
+      const appliedRef = result?.profileRef ?? profileRef;
+      runtimeProfileMissingRef.current = false;
+      if (isNew) newSessionProfileOverrideRef.current = true;
+      setActiveProfileRef(appliedRef);
+      await loadSession(sid, false, true);
+    } catch (e) {
+      setNewSessionModel(previousNewSessionModel);
+      setActiveProfileRef(previous);
+      console.error("Failed to switch profile:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : "Failed to switch profile" });
+    }
+  }, [activeProfileRef, addNotice, isNew, loadSession, newSessionModel]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     ignoreProgrammaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_IGNORE_MS;
@@ -1991,7 +2208,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
         if (agentState?.running) {
-          loadTools(session.id);
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
             agentRunningRef.current = true;
             setAgentRunning(true);
@@ -2117,7 +2333,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, thinkingLevel, profilesResponse, profileOptions, activeProfileRef, activeProfile, profileSwitchSupported,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -2133,7 +2349,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand, handleOpenAIFastToggle,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
+    handleProfileChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,
