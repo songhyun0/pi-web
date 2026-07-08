@@ -185,7 +185,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize,
+    notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, extensionChrome, extensionCompatibility, extensionAutocompleteProviders, respondToExtensionUi, sendExtensionCustomInput, sendExtensionCustomResize, sendEditorSnapshot, requestExtensionAutocomplete,
     isAutoModelSelection,
     agentPhase,
     isNew,
@@ -346,6 +346,9 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
       cwd={session?.cwd ?? newSessionCwd}
+      extensionAutocompleteProviderCount={extensionAutocompleteProviders.length}
+      onEditorSnapshot={sendEditorSnapshot}
+      onExtensionAutocomplete={requestExtensionAutocomplete}
     />
   );
 
@@ -491,7 +494,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
-              <ExtensionUiInline statuses={extensionStatuses} widgets={aboveEditorWidgets} />
+              <ExtensionUiInline statuses={extensionStatuses} widgets={aboveEditorWidgets} chrome={extensionChrome} compatibility={extensionCompatibility} />
 
             {(() => {
               const toolResultsMap = new Map<string, ToolResultMessage>();
@@ -688,7 +691,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
-            <ExtensionUiInline widgets={belowEditorWidgets} />
+            <ExtensionUiInline widgets={belowEditorWidgets} chrome={{ headerLines: [], footerLines: extensionChrome.footerLines, working: { visible: false } }} />
           </div>
         </div>
         {chatInputElement}

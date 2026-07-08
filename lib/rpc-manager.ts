@@ -320,6 +320,9 @@ export class AgentSessionWrapper {
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
           extensionStatuses: this.extensionUi.getStatuses(),
           extensionWidgets: this.extensionUi.getWidgets(),
+          extensionChrome: this.extensionUi.getChrome(),
+          extensionCompatibility: this.extensionUi.getCompatibilityReports(),
+          extensionAutocompleteProviders: this.extensionUi.getAutocompleteProviders(),
           openAIFastMode: getPiCodexFastModeState(this.inner.model),
           openAIFastConfig: loadPiCodexFastModeConfig(),
         };
@@ -578,6 +581,18 @@ export class AgentSessionWrapper {
       case "extension_ui_response": {
         this.extensionUi.resolveExtensionUiResponse(command as ExtensionUiResponse);
         return null;
+      }
+
+      case "extension_editor_snapshot": {
+        this.extensionUi.setEditorTextSnapshot(command.text as string);
+        return null;
+      }
+
+      case "extension_autocomplete": {
+        return await this.extensionUi.queryAutocomplete(
+          typeof command.text === "string" ? command.text : "",
+          typeof command.cursor === "number" ? command.cursor : 0,
+        );
       }
 
       case "extension_ui_input": {

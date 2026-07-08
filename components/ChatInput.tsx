@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
-import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
+import type { BuiltinSlashCommandResult, CompactResultInfo, ExtensionAutocompleteResult, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import {
@@ -65,10 +65,13 @@ interface Props {
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
+  extensionAutocompleteProviderCount?: number;
+  onEditorSnapshot?: (text: string) => void;
+  onExtensionAutocomplete?: (text: string, cursor: number) => Promise<ExtensionAutocompleteResult>;
 }
-
 export interface ChatInputHandle {
   insertText: (text: string) => void;
+  setText: (text: string) => void;
   insertIfEmpty: (text: string) => void;
   prependText: (text: string) => void;
   addImages: (files: File[]) => void;
@@ -213,6 +216,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
+  extensionAutocompleteProviderCount = 0,
+  onEditorSnapshot,
+  onExtensionAutocomplete,
 }: Props, ref) {
   const isMobile = useIsMobile();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
@@ -237,7 +243,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [webKeybindings, setWebKeybindings] = useState<WebKeybinding[]>(() => buildWebKeybindings());
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [promptEditorValue, setPromptEditorValue] = useState("");
-
+  const [extensionAutocomplete, setExtensionAutocomplete] = useState<ExtensionAutocompleteResult>(null);
+  const [extensionAutocompleteOpen, setExtensionAutocompleteOpen] = useState(false);
+  const [extensionAutocompleteActiveIndex, setExtensionAutocompleteActiveIndex] = useState(0);
+  const [cursorPosition, setCursorPosition] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteAnchorRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -251,6 +260,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const slashCommandsRequestedRef = useRef(false);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const atItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const extensionAutocompleteItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const fileIndexMetaRef = useRef<{ cwd: string; fetchedAt: number } | null>(null);
   const fileIndexFetchingRef = useRef<string | null>(null);
   const draftKeyRef = useRef(draftKey);
@@ -322,6 +332,20 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         const pos = start + sep.length + text.length;
         ta.setSelectionRange(pos, pos);
         ta.focus();
+        ta.style.height = "auto";
+        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+      });
+    },
+    setText(text: string) {
+      const ta = textareaRef.current;
+      setValue(text);
+      setAtQuery(null);
+      setExtensionAutocomplete(null);
+      setExtensionAutocompleteOpen(false);
+      requestAnimationFrame(() => {
+        if (!ta) return;
+        ta.focus();
+        ta.setSelectionRange(text.length, text.length);
         ta.style.height = "auto";
         ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
@@ -432,6 +456,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       return draft?.images.map(draftImageToAttachedImage) ?? [];
     });
   }, [draftKey]);
+
+  useEffect(() => {
+    onEditorSnapshot?.(value);
+  }, [onEditorSnapshot, value]);
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -656,6 +684,62 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     atItemRefs.current[atActiveIndex]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [atActiveIndex, atMenuOpen]);
 
+  useEffect(() => {
+    if (extensionAutocompleteProviderCount === 0 || !onExtensionAutocomplete || slashMenuOpen || atMenuOpen) {
+      setExtensionAutocompleteOpen(false);
+      setExtensionAutocomplete(null);
+      return;
+    }
+    const cursor = cursorPosition;
+    const timer = setTimeout(() => {
+      onExtensionAutocomplete(value, cursor).then((result) => {
+        setExtensionAutocomplete(result);
+        setExtensionAutocompleteActiveIndex(0);
+        setExtensionAutocompleteOpen(Boolean(result?.items.length));
+      }).catch(() => {
+        setExtensionAutocomplete(null);
+        setExtensionAutocompleteOpen(false);
+      });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [atMenuOpen, cursorPosition, extensionAutocompleteProviderCount, onExtensionAutocomplete, slashMenuOpen, value]);
+
+  useEffect(() => {
+    if ((extensionAutocompleteActiveIndex >= (extensionAutocomplete?.items.length ?? 0))) {
+      setExtensionAutocompleteActiveIndex(Math.max(0, (extensionAutocomplete?.items.length ?? 1) - 1));
+    }
+  }, [extensionAutocomplete?.items.length, extensionAutocompleteActiveIndex]);
+
+  useEffect(() => {
+    extensionAutocompleteItemRefs.current.length = extensionAutocomplete?.items.length ?? 0;
+  }, [extensionAutocomplete?.items.length]);
+
+  useEffect(() => {
+    if (!extensionAutocompleteOpen) return;
+    extensionAutocompleteItemRefs.current[extensionAutocompleteActiveIndex]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [extensionAutocompleteActiveIndex, extensionAutocompleteOpen]);
+
+  const applyExtensionAutocomplete = useCallback((index: number) => {
+    const item = extensionAutocomplete?.items[index];
+    if (!item) return;
+    const ta = textareaRef.current;
+    const cursor = ta?.selectionStart ?? value.length;
+    const prefix = item.prefix ?? "";
+    const replaceStart = prefix && value.slice(0, cursor).endsWith(prefix) ? cursor - prefix.length : cursor;
+    const nextValue = value.slice(0, replaceStart) + item.value + value.slice(cursor);
+    const nextPos = replaceStart + item.value.length;
+    setValue(nextValue);
+    setExtensionAutocomplete(null);
+    setExtensionAutocompleteOpen(false);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextPos, nextPos);
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    });
+  }, [extensionAutocomplete, value]);
   const applySlashCommand = useCallback((command: SlashCommandPaletteItem) => {
     const nextValue = `/${command.name} `;
     setValue(nextValue);
@@ -817,6 +901,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
 
+      if (extensionAutocompleteOpen && extensionAutocomplete?.items.length && !isComposing) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setExtensionAutocompleteActiveIndex((i) => Math.min(extensionAutocomplete.items.length - 1, i + 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setExtensionAutocompleteActiveIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setExtensionAutocompleteOpen(false);
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          applyExtensionAutocomplete(extensionAutocompleteActiveIndex);
+          return;
+        }
+      }
       if (eventMatchesWebAction(e.nativeEvent, webKeybindings, "chat.submit")) {
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
@@ -827,7 +933,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
     },
-    [isStreaming, onSteer, onFollowUp, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, webKeybindings, openPromptEditor]
+    [isStreaming, onSteer, onFollowUp, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, extensionAutocompleteOpen, extensionAutocomplete, extensionAutocompleteActiveIndex, applyExtensionAutocomplete, webKeybindings, openPromptEditor]
   );
 
   const handleInput = useCallback(() => {
@@ -1400,6 +1506,73 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </div>
             );
           })()}
+          {extensionAutocompleteOpen && extensionAutocomplete?.items.length ? (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: "calc(100% + 8px)",
+                zIndex: 118,
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
+                overflow: "hidden",
+                maxHeight: atMenuMaxHeight,
+              }}
+            >
+              <div
+                style={{
+                  padding: "8px 10px",
+                  borderBottom: "1px solid var(--border)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  fontSize: 11,
+                  color: "var(--text-dim)",
+                }}
+              >
+                <span>{extensionAutocomplete.label ? `Extension autocomplete · ${extensionAutocomplete.label}` : "Extension autocomplete"}</span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+              </div>
+              <div style={{ maxHeight: atMenuBodyMaxHeight, overflowY: "auto", padding: 4 }}>
+                {extensionAutocomplete.items.map((item, index) => {
+                  const active = index === extensionAutocompleteActiveIndex;
+                  return (
+                    <button
+                      key={item.id}
+                      ref={(node) => { extensionAutocompleteItemRefs.current[index] = node; }}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyExtensionAutocomplete(index);
+                      }}
+                      onMouseEnter={() => setExtensionAutocompleteActiveIndex(index)}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 3,
+                        padding: "6px 8px",
+                        border: "none",
+                        borderRadius: 6,
+                        background: active ? "var(--bg-selected)" : "none",
+                        color: "var(--text)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        fontSize: 12.5,
+                      }}
+                    >
+                      <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>{item.label || item.value}</span>
+                      {item.description && <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{item.description}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div
             style={{
               display: "flex",
@@ -1420,10 +1593,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
+              setCursorPosition(e.target.selectionStart);
               updateAtQuery(e.target.value, e.target.selectionStart);
             }}
             onSelect={(e) => {
               const el = e.currentTarget;
+              setCursorPosition(el.selectionStart);
               updateAtQuery(el.value, el.selectionStart);
             }}
             onKeyDown={handleKeyDown}
@@ -1434,6 +1609,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               isComposingRef.current = false;
               lastCompositionEndAtRef.current = Date.now();
               const el = e.currentTarget;
+              setCursorPosition(el.selectionStart);
               updateAtQuery(el.value, el.selectionStart);
             }}
             onInput={handleInput}
