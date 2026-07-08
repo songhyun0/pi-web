@@ -13,6 +13,7 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { SettingsModal } from "./SettingsModal";
 import { ProjectTrustModal } from "./ProjectTrustModal";
+import { HotkeysModal } from "./HotkeysModal";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -85,6 +86,7 @@ export function AppShell() {
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectTrustOpen, setProjectTrustOpen] = useState(false);
+  const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
@@ -507,6 +509,9 @@ export function AppShell() {
         break;
       case "openProjectTrust":
         setProjectTrustOpen(true);
+        break;
+      case "openHotkeys":
+        setHotkeysOpen(true);
         break;
       case "newSession": {
         const cwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
@@ -1478,6 +1483,7 @@ export function AppShell() {
         }}
       />
     )}
+    {hotkeysOpen && <HotkeysModal onClose={() => setHotkeysOpen(false)} />}
     {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
       <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
     )}

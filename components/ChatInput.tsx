@@ -11,6 +11,7 @@ import {
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { readSafeAreaInsetPx } from "@/lib/safe-area";
+import { buildWebKeybindings, eventMatchesWebAction, type WebKeybinding } from "@/lib/web-keybindings";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -233,6 +234,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
   const [autocompleteMenuMaxHeight, setAutocompleteMenuMaxHeight] = useState(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX);
+  const [webKeybindings, setWebKeybindings] = useState<WebKeybinding[]>(() => buildWebKeybindings());
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [promptEditorValue, setPromptEditorValue] = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteAnchorRef = useRef<HTMLDivElement>(null);
@@ -254,6 +258,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const attachedImagesRef = useRef(attachedImages);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/keybindings", { cache: "no-store" })
+      .then(async (res) => {
+        const body = await res.json() as { keybindings?: WebKeybinding[] };
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return body.keybindings ?? buildWebKeybindings();
+      })
+      .then((bindings) => { if (!cancelled) setWebKeybindings(bindings); })
+      .catch(() => { if (!cancelled) setWebKeybindings(buildWebKeybindings()); });
+    return () => { cancelled = true; };
+  }, []);
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -363,6 +380,29 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       textareaRef.current.style.height = "auto";
     }
   }, [clearImages, draftKey]);
+
+  const openPromptEditor = useCallback(() => {
+    setPromptEditorValue(valueRef.current);
+    setPromptEditorOpen(true);
+    requestAnimationFrame(() => {
+      const editor = document.getElementById("pi-web-prompt-editor") as HTMLTextAreaElement | null;
+      editor?.focus();
+      if (editor) editor.setSelectionRange(editor.value.length, editor.value.length);
+    });
+  }, []);
+
+  const savePromptEditor = useCallback(() => {
+    setValue(promptEditorValue);
+    setAtQuery(null);
+    setPromptEditorOpen(false);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, [promptEditorValue]);
 
   useEffect(() => {
     if (!draftKey || draftKeyRef.current !== draftKey) return;
@@ -707,6 +747,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         return;
       }
 
+      if (!isComposing && eventMatchesWebAction(e.nativeEvent, webKeybindings, "chat.editor.external")) {
+        e.preventDefault();
+        openPromptEditor();
+        return;
+      }
+
+      if (!isComposing && eventMatchesWebAction(e.nativeEvent, webKeybindings, "chat.queue.followUp")) {
+        e.preventDefault();
+        if (isStreaming && onFollowUp) sendQueued("followup");
+        return;
+      }
+
       if (slashMenuOpen && slashQuery !== null) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -765,7 +817,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
 
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (eventMatchesWebAction(e.nativeEvent, webKeybindings, "chat.submit")) {
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
           // Default Enter sends as steer if available, else followup
@@ -775,7 +827,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
     },
-    [isStreaming, onSteer, onFollowUp, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion]
+    [isStreaming, onSteer, onFollowUp, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, webKeybindings, openPromptEditor]
   );
 
   const handleInput = useCallback(() => {
@@ -962,6 +1014,37 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           e.target.value = "";
         }}
       />
+      {promptEditorOpen && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ width: "min(900px, 96vw)", height: "min(720px, 86vh)", border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg)", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>Prompt editor</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Browser-safe replacement for the CLI external editor shortcut.</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setPromptEditorOpen(false)} style={{ border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Cancel</button>
+                <button onClick={savePromptEditor} style={{ border: "1px solid var(--accent)", background: "var(--accent)", color: "white", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Use text</button>
+              </div>
+            </div>
+            <textarea
+              id="pi-web-prompt-editor"
+              value={promptEditorValue}
+              onChange={(event) => setPromptEditorValue(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  savePromptEditor();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setPromptEditorOpen(false);
+                }
+              }}
+              style={{ flex: 1, resize: "none", border: "none", outline: "none", padding: 16, background: "var(--bg)", color: "var(--text)", fontSize: 14, lineHeight: 1.5, fontFamily: "var(--font-mono)" }}
+            />
+          </div>
+        </div>
+      )}
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
         {/* Queued steering / follow-up messages (delivered by pi on upcoming turns) */}
         {((queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)) > 0 && (
