@@ -32,6 +32,7 @@ export type SlashUiAction =
   | { type: "openBranchNavigator" }
   | { type: "openForkSelector" }
   | { type: "openModelsConfig"; section?: "models" | "auth" | "scoped" }
+  | { type: "openSettings" }
   | { type: "openProjectTrust" }
   | { type: "newSession" }
   | { type: "openSessionSidebar" }

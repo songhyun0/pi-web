@@ -502,6 +502,9 @@ export function AppShell() {
       case "openModelsConfig":
         setModelsConfigOpen(true);
         break;
+      case "openSettings":
+        setSettingsOpen(true);
+        break;
       case "openProjectTrust":
         setProjectTrustOpen(true);
         break;
@@ -1456,8 +1459,13 @@ export function AppShell() {
     {settingsOpen && (
       <SettingsModal
         settings={appSettings}
+        cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null}
         onClose={() => setSettingsOpen(false)}
         onSaved={(next) => setAppSettings(next)}
+        onOpenModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+        onOpenScopedModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+        onOpenAuth={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+        onOpenProjectTrust={() => { setSettingsOpen(false); setProjectTrustOpen(true); }}
       />
     )}
     {projectTrustOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
