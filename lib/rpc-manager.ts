@@ -175,6 +175,19 @@ function profileRuntimeSignature(profile: AgentProfileSessionOptions): string {
   });
 }
 
+function profileHasPromptContributions(profile: AgentProfileSessionOptions): boolean {
+  return profile.instructions.mode !== "default"
+    || profile.instructions.files.length > 0
+    || Boolean(profile.instructions.text?.trim())
+    || profile.resources.skillPaths.length > 0
+    || profile.resources.promptPaths.length > 0
+    || profile.resources.themePaths.length > 0;
+}
+
+function shouldForceEmptySystemPromptForProfile(profile: AgentProfileSessionOptions): boolean {
+  return profile.toolNames.length === 0 && !profile.includeExtensionTools && !profileHasPromptContributions(profile);
+}
+
 type PersistedProfileState = {
   profileRef: AgentProfileSessionOptions["profileRef"];
   profileName?: string;
@@ -192,6 +205,7 @@ type ProfileRuntimeState = {
   profile: AgentProfileSessionOptions;
   signature: string;
   snapshots: Set<string>;
+  restoreError?: string;
   refresh: () => AgentProfileSessionOptions;
 };
 type ProfileRuntimeStateRef = { current?: ProfileRuntimeState };
@@ -308,32 +322,42 @@ function persistedStateFromEntryData(data: unknown): PersistedProfileState | und
   };
 }
 
+function profileRestoreErrorMessage(profileRef: AgentProfileSessionOptions["profileRef"], error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `Failed to restore profile ${profileRef}: ${detail}`;
+}
+
 function resolveProfileFromPersistedState(cwd: string, persisted: PersistedProfileState): AgentProfileSessionOptions {
+  const restored = expandAgentProfileForNewSession(cwd, resolveAgentProfile(cwd, persisted.profileRef));
+  const useSnapshot = persisted.toolPolicySnapshot === true;
+  const allowedToolNames = new Set([...restored.toolNames, ...CODING_TOOL_NAMES]);
+  const snapshotToolNames = persisted.toolNames?.filter((name) => allowedToolNames.has(name));
+  const toolNames = useSnapshot && snapshotToolNames
+    ? snapshotToolNames
+    : restored.toolNames;
+  const includeExtensionTools = useSnapshot && persisted.includeExtensionTools !== undefined
+    ? persisted.includeExtensionTools
+    : restored.includeExtensionTools;
+  const extensionToolMode: ExtensionToolMode = useSnapshot
+    ? (!includeExtensionTools ? "none" : persisted.extensionToolMode ?? restored.extensionToolMode)
+    : restored.extensionToolMode;
+  return {
+    ...restored,
+    ...(persisted.modelOverride ? { provider: undefined, modelId: undefined } : {}),
+    ...(persisted.thinkingOverride ? { thinkingLevel: undefined } : {}),
+    toolNames,
+    includeExtensionTools,
+    extensionToolMode,
+  };
+}
+
+function loadProfileFromPersistedState(cwd: string, persisted: PersistedProfileState): { profile: AgentProfileSessionOptions; restoreError?: string } {
   try {
-    const restored = expandAgentProfileForNewSession(cwd, resolveAgentProfile(cwd, persisted.profileRef));
-    const useSnapshot = persisted.toolPolicySnapshot === true;
-    const allowedToolNames = new Set([...restored.toolNames, ...CODING_TOOL_NAMES]);
-    const snapshotToolNames = persisted.toolNames?.filter((name) => allowedToolNames.has(name));
-    const toolNames = useSnapshot && snapshotToolNames
-      ? snapshotToolNames
-      : restored.toolNames;
-    const includeExtensionTools = useSnapshot && persisted.includeExtensionTools !== undefined
-      ? persisted.includeExtensionTools
-      : restored.includeExtensionTools;
-    const extensionToolMode: ExtensionToolMode = useSnapshot
-      ? (!includeExtensionTools ? "none" : persisted.extensionToolMode ?? restored.extensionToolMode)
-      : restored.extensionToolMode;
-    return {
-      ...restored,
-      ...(persisted.modelOverride ? { provider: undefined, modelId: undefined } : {}),
-      ...(persisted.thinkingOverride ? { thinkingLevel: undefined } : {}),
-      toolNames,
-      includeExtensionTools,
-      extensionToolMode,
-    };
+    return { profile: resolveProfileFromPersistedState(cwd, persisted) };
   } catch (error) {
+    const restoreError = profileRestoreErrorMessage(persisted.profileRef, error);
     console.warn("[pi-web] failed to restore persisted profile", persisted.profileRef, error instanceof Error ? error.message : error);
-    return makeUnavailableProfileOptions(persisted.profileRef);
+    return { profile: makeUnavailableProfileOptions(persisted.profileRef), restoreError };
   }
 }
 
@@ -342,17 +366,22 @@ function createProfileRuntimeState(
   profile: AgentProfileSessionOptions | undefined,
   toolPolicySnapshot = false,
   overrides: { modelOverride?: boolean; thinkingOverride?: boolean } = {},
-): ProfileRuntimeState | undefined {
+  persistedOverride?: PersistedProfileState,
+  restoreError?: string,
+ ): ProfileRuntimeState | undefined {
   if (!profile) return undefined;
-  const persisted = persistedStateFromProfile(profile, toolPolicySnapshot, overrides);
+  const persisted = persistedOverride ?? persistedStateFromProfile(profile, toolPolicySnapshot, overrides);
   const state: ProfileRuntimeState = {
     cwd,
     persisted,
     profile,
     signature: profileRuntimeSignature(profile),
     snapshots: new Set<string>(),
+    ...(restoreError ? { restoreError } : {}),
     refresh: () => {
-      state.profile = resolveProfileFromPersistedState(state.cwd, state.persisted);
+      const restored = loadProfileFromPersistedState(state.cwd, state.persisted);
+      state.profile = restored.profile;
+      state.restoreError = restored.restoreError;
       state.signature = profileRuntimeSignature(state.profile);
       return state.profile;
     },
@@ -400,13 +429,14 @@ function persistProfileStateOnce(
   appendProfileStateEntry(sessionManager, profile, toolPolicySnapshot, overrides);
 }
 
-function loadPersistedProfileState(sessionManager: ProfileStateSessionManager, cwd: string): { profile: AgentProfileSessionOptions; persisted: PersistedProfileState } | undefined {
+function loadPersistedProfileState(sessionManager: ProfileStateSessionManager, cwd: string): { profile: AgentProfileSessionOptions; persisted: PersistedProfileState; restoreError?: string } | undefined {
   const entry = [...sessionManager.getEntries()]
     .reverse()
     .find(isProfileStateEntry);
   if (!entry) return undefined;
   const persisted = persistedStateFromEntryData(entry.data) ?? persistedStateFromProfile(makeUnavailableProfileOptions());
-  return { persisted, profile: resolveProfileFromPersistedState(cwd, persisted) };
+  const restored = loadProfileFromPersistedState(cwd, persisted);
+  return { persisted, profile: restored.profile, ...(restored.restoreError ? { restoreError: restored.restoreError } : {}) };
 }
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -475,6 +505,9 @@ export class AgentSessionWrapper {
   private activeToolNames: string[] | undefined;
   private activeIncludeExtensionTools = true;
   private activeExtensionToolMode: ExtensionToolMode = "all";
+  private profilePolicyError: Error | null = null;
+  private applyingActiveToolPolicy = false;
+  private readonly setActiveToolsByNameUnwrapped: (names: string[]) => void;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
@@ -482,6 +515,14 @@ export class AgentSessionWrapper {
 
   constructor(public readonly inner: AgentSessionLike, private readonly profileStateRef: ProfileRuntimeStateRef, private readonly cwd: string) {
     this.extensionUi = new ExtensionUiBridge({ emit: (event) => this.emit(event as AgentEvent) });
+    this.setActiveToolsByNameUnwrapped = this.inner.setActiveToolsByName.bind(this.inner);
+    this.inner.setActiveToolsByName = (names: string[]) => {
+      if (this.applyingActiveToolPolicy || this.activeToolNames === undefined) {
+        this.setActiveToolsByNameUnwrapped(names);
+        return;
+      }
+      this.applyActiveToolPolicy();
+    };
   }
 
   private get profileState(): ProfileRuntimeState | undefined {
@@ -592,7 +633,11 @@ export class AgentSessionWrapper {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
       this.extensionsBound = true;
-      this.applyActiveToolPolicy();
+      try {
+        this.applyActiveToolPolicy();
+      } catch (err) {
+        console.warn("[pi-web] profile tool policy rejected extension tools:", err instanceof Error ? err.message : err);
+      }
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
       this.extensionBindingError = err;
@@ -630,7 +675,7 @@ export class AgentSessionWrapper {
     this.activeToolNames = [...profile.toolNames];
     this.activeIncludeExtensionTools = profile.includeExtensionTools;
     this.activeExtensionToolMode = profile.extensionToolMode;
-    this.forceEmptySystemPrompt = profile.toolNames.length === 0 && !profile.includeExtensionTools && profile.instructions.mode === "default";
+    this.forceEmptySystemPrompt = shouldForceEmptySystemPromptForProfile(profile);
   }
 
   private refreshActiveProfilePolicy(): boolean {
@@ -644,6 +689,18 @@ export class AgentSessionWrapper {
 
   private assertActiveProfileReady(): void {
     const profileState = this.profileState;
+    if (profileState?.restoreError) {
+      const error = new Error(profileState.restoreError);
+      this.profilePolicyError = error;
+      try {
+        this.applyActiveToolPolicy();
+      } catch {
+        // Keep the profile-restore failure as the user-visible blocker.
+      }
+      this.profilePolicyError = error;
+      throw error;
+    }
+    if (this.profilePolicyError) throw this.profilePolicyError;
     if (!profileState) return;
     const profile = profileState.profile;
     try {
@@ -667,15 +724,20 @@ export class AgentSessionWrapper {
     let changed = false;
     if (profileState) {
       const previousSignature = profileState.signature;
-      const profile = resolveProfileFromPersistedState(profileState.cwd, profileState.persisted);
-      const nextSignature = profileRuntimeSignature(profile);
+      const restored = loadProfileFromPersistedState(profileState.cwd, profileState.persisted);
+      const nextSignature = profileRuntimeSignature(restored.profile);
       changed = previousSignature !== nextSignature;
       if (changed && this.hasActiveAgentRun()) {
         throw new Error("Active profile changed while the session is running; wait for the current operation to finish before queueing another message.");
       }
-      profileState.profile = profile;
+      profileState.profile = restored.profile;
+      profileState.restoreError = restored.restoreError;
       profileState.signature = nextSignature;
-      this.applyProfileToolPolicy(profile);
+      this.applyProfileToolPolicy(restored.profile);
+      if (restored.restoreError) {
+        this.applyActiveToolPolicy();
+        throw new Error(restored.restoreError);
+      }
     }
     if (changed) {
       await this.inner.reload({
@@ -691,7 +753,28 @@ export class AgentSessionWrapper {
 
   private applyActiveToolPolicy(): void {
     if (this.activeToolNames !== undefined) {
-      this.inner.setActiveToolsByName(withExtensionTools(this.inner, this.activeToolNames, this.activeIncludeExtensionTools, this.activeExtensionToolMode));
+      try {
+        const nextToolNames = withExtensionTools(this.inner, this.activeToolNames, this.activeIncludeExtensionTools, this.activeExtensionToolMode);
+        this.applyingActiveToolPolicy = true;
+        try {
+          this.setActiveToolsByNameUnwrapped(nextToolNames);
+        } finally {
+          this.applyingActiveToolPolicy = false;
+        }
+        this.profilePolicyError = null;
+      } catch (error) {
+        const policyError = error instanceof Error ? error : new Error(String(error));
+        this.profilePolicyError = policyError;
+        this.forceEmptySystemPrompt = true;
+        this.applyingActiveToolPolicy = true;
+        try {
+          this.setActiveToolsByNameUnwrapped([]);
+        } finally {
+          this.applyingActiveToolPolicy = false;
+        }
+        this.applyForcedEmptySystemPrompt();
+        throw policyError;
+      }
     }
     this.applyForcedEmptySystemPrompt();
   }
@@ -715,7 +798,9 @@ export class AgentSessionWrapper {
       ...(overrides.modelOverride ? { modelOverride: true } : {}),
       ...(overrides.thinkingOverride ? { thinkingOverride: true } : {}),
     };
-    profileState.profile = resolveProfileFromPersistedState(profileState.cwd, profileState.persisted);
+    const restored = loadProfileFromPersistedState(profileState.cwd, profileState.persisted);
+    profileState.profile = restored.profile;
+    profileState.restoreError = restored.restoreError;
     profileState.signature = profileRuntimeSignature(profileState.profile);
     appendProfileStateEntry(this.inner.sessionManager, profileState.profile, profileState.persisted.toolPolicySnapshot === true, {
       modelOverride: profileState.persisted.modelOverride === true,
@@ -892,7 +977,14 @@ export class AgentSessionWrapper {
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,
-          profile: this.profileState ? { ref: this.profileState.profile.profileRef, name: this.profileState.profile.profileName } : null,
+          profile: this.profileState ? {
+            ref: this.profileState.profile.profileRef,
+            name: this.profileState.profile.profileName,
+            ...((this.profileState.restoreError ?? this.profilePolicyError?.message) ? {
+              error: this.profileState.restoreError ?? this.profilePolicyError?.message,
+              missing: Boolean(this.profileState.restoreError),
+            } : {}),
+          } : null,
           systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
           extensionStatuses: this.extensionUi.getStatuses(),
@@ -906,13 +998,19 @@ export class AgentSessionWrapper {
       }
 
       case "set_model": {
-        const { provider, modelId } = command as { provider: string; modelId: string };
-        const registry = this.inner.modelRegistry;
-        const model = registry.find(provider, modelId);
-        if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
-        await this.inner.setModel(model);
-        this.persistProfileOverrideFlags({ modelOverride: true });
-        return { id: model.id, provider: model.provider };
+        if (this.isRunning()) throw new Error("Cannot change model while the session is running");
+        const releaseOperation = this.beginProfileSensitiveOperation();
+        try {
+          const { provider, modelId } = command as { provider: string; modelId: string };
+          const registry = this.inner.modelRegistry;
+          const model = registry.find(provider, modelId);
+          if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+          await this.inner.setModel(model);
+          this.persistProfileOverrideFlags({ modelOverride: true });
+          return { id: model.id, provider: model.provider };
+        } finally {
+          releaseOperation();
+        }
       }
 
       case "fork": {
@@ -999,10 +1097,16 @@ export class AgentSessionWrapper {
       }
 
       case "set_thinking_level": {
-        const level = command.level as string;
-        if (level !== "auto") this.setThinkingLevel(level);
-        this.persistProfileOverrideFlags({ thinkingOverride: true });
-        return null;
+        if (this.isRunning()) throw new Error("Cannot change thinking level while the session is running");
+        const releaseOperation = this.beginProfileSensitiveOperation();
+        try {
+          const level = command.level as string;
+          if (level !== "auto") this.setThinkingLevel(level);
+          this.persistProfileOverrideFlags({ thinkingOverride: true });
+          return null;
+        } finally {
+          releaseOperation();
+        }
       }
 
       case "compact": {
@@ -1155,16 +1259,22 @@ export class AgentSessionWrapper {
 
       case "toggle_openai_fast": {
         await this.waitForExtensionsBound();
-        if (!this.hasOpenAIFastCommand()) {
-          throw new Error(`OpenAI Fast mode is not available in this session. Install or reload the ${PI_CODEX_FAST_PACKAGE_NAME} plugin.`);
-        }
+        const releaseOperation = this.beginProfileSensitiveOperation();
+        try {
+          await this.prepareProfileRuntimeForUserTurn();
+          if (!this.hasOpenAIFastCommand()) {
+            throw new Error(`OpenAI Fast mode is not available in this session. Install or reload the ${PI_CODEX_FAST_PACKAGE_NAME} plugin.`);
+          }
 
-        const currentFastMode = getPiCodexFastModeState(this.inner.model);
-        if (!currentFastMode.eligible) {
-          throw new Error("OpenAI Fast mode is unavailable for the current model.");
-        }
+          const currentFastMode = getPiCodexFastModeState(this.inner.model);
+          if (!currentFastMode.eligible) {
+            throw new Error("OpenAI Fast mode is unavailable for the current model.");
+          }
 
-        await this.inner.prompt(`/fast ${currentFastMode.active ? "off" : "on"}`, { source: "rpc" });
+          await this.inner.prompt(`/fast ${currentFastMode.active ? "off" : "on"}`, { source: "rpc" });
+        } finally {
+          releaseOperation();
+        }
         return {
           extensionStatuses: this.extensionUi.getStatuses(),
           extensionWidgets: this.extensionUi.getWidgets(),
@@ -1208,8 +1318,8 @@ export class AgentSessionWrapper {
             const nextState = createProfileRuntimeState(profileCwd, profile);
             if (!nextState) throw new Error("Unable to create profile runtime state");
             this.profileState = nextState;
+            this.setActiveToolPolicy(profile.toolNames, profile.includeExtensionTools, profile.extensionToolMode, shouldForceEmptySystemPromptForProfile(profile));
             await reloadWithCurrentProfile();
-            this.setActiveToolPolicy(profile.toolNames, profile.includeExtensionTools, profile.extensionToolMode, profile.instructions.mode === "default");
             await this.applyProfileModelAndThinking(profile);
             appendProfileStateEntry(this.inner.sessionManager, profile);
             return { profileRef: profile.profileRef, profileName: profile.profileName };
@@ -1220,7 +1330,9 @@ export class AgentSessionWrapper {
                 ...previousState,
                 snapshots: new Set<string>(),
                 refresh: () => {
-                  restoredState.profile = resolveProfileFromPersistedState(restoredState.cwd, restoredState.persisted);
+                  const restored = loadProfileFromPersistedState(restoredState.cwd, restoredState.persisted);
+                  restoredState.profile = restored.profile;
+                  restoredState.restoreError = restored.restoreError;
                   restoredState.signature = profileRuntimeSignature(restoredState.profile);
                   return restoredState.profile;
                 },
@@ -1280,15 +1392,16 @@ export class AgentSessionWrapper {
           const includeExtensionTools = typeof command.includeExtensionTools === "boolean"
             ? command.includeExtensionTools as boolean
             : toolNames.length > 0;
-          this.setActiveToolPolicy(toolNames, includeExtensionTools);
           const profileState = this.profileState;
+          const nextProfile = profileState ? {
+            ...profileState.profile,
+            toolNames: [...toolNames],
+            includeExtensionTools,
+            extensionToolMode: includeExtensionTools ? "all" as const : "none" as const,
+          } : undefined;
+          this.setActiveToolPolicy(toolNames, includeExtensionTools, includeExtensionTools ? "all" : "none", nextProfile ? shouldForceEmptySystemPromptForProfile(nextProfile) : undefined);
           if (profileState) {
-            profileState.profile = {
-              ...profileState.profile,
-              toolNames: [...toolNames],
-              includeExtensionTools,
-              extensionToolMode: includeExtensionTools ? "all" : "none",
-            };
+            profileState.profile = nextProfile!;
             profileState.persisted = persistedStateFromProfile(profileState.profile, true, {
               modelOverride: profileState.persisted.modelOverride === true,
               thinkingOverride: profileState.persisted.thinkingOverride === true,
@@ -1539,7 +1652,7 @@ export async function startRpcSession(
     const profileStateRef: ProfileRuntimeStateRef = { current: createProfileRuntimeState(cwd, profileOptions, profileToolPolicySnapshot, {
       modelOverride: options.profileModelOverride === true || persistedProfileState?.persisted.modelOverride === true,
       thinkingOverride: options.profileThinkingOverride === true || persistedProfileState?.persisted.thinkingOverride === true,
-    }) };
+    }, persistedProfileState?.persisted, persistedProfileState?.restoreError) };
     const resourceLoaderOptions = buildProfileResourceLoaderOptions(profileStateRef);
 
     // Build services first so extension-registered providers are available
@@ -1569,7 +1682,10 @@ export async function startRpcSession(
 
     const extensionToolMode = profileOptions?.extensionToolMode ?? (includeExtensionTools ? "all" : "none");
     const wrapper = new AgentSessionWrapper(inner, profileStateRef, cwd);
-    wrapper.setActiveToolPolicy(effectiveToolNames, includeExtensionTools, extensionToolMode, profileOptions?.instructions.mode === "default");
+    const forceEmptySystemPrompt = profileOptions
+      ? shouldForceEmptySystemPromptForProfile(profileOptions)
+      : Boolean(effectiveToolNames && effectiveToolNames.length === 0 && !includeExtensionTools);
+    wrapper.setActiveToolPolicy(effectiveToolNames, includeExtensionTools, extensionToolMode, forceEmptySystemPrompt);
     if (profileOptions) await wrapper.applyProfileModelAndThinking(profileOptions);
     wrapper.start();
 
@@ -1579,7 +1695,7 @@ export async function startRpcSession(
 
     wrapper.onDestroy(() => registry.delete(realSessionId));
     registry.set(realSessionId, wrapper);
-    wrapper.beginExtensionBinding({ forceEmptySystemPrompt: effectiveToolNames?.length === 0 && !includeExtensionTools && profileOptions?.instructions.mode === "default" });
+    wrapper.beginExtensionBinding({ forceEmptySystemPrompt });
 
     return { session: wrapper, realSessionId };
   })().finally(() => locks.delete(sessionId));

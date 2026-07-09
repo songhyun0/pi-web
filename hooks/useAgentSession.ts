@@ -130,7 +130,7 @@ type AgentStateResponse = {
   extensionCompatibility?: ExtensionCompatibilityItem[];
   extensionAutocompleteProviders?: ExtensionAutocompleteProviderState[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
-  profile?: { ref: AgentProfileRef; name: string } | null;
+  profile?: { ref: AgentProfileRef; name: string; error?: string; missing?: boolean } | null;
   openAIFastMode?: OpenAIFastModeState;
   openAIFastConfig?: OpenAIFastModeConfigState;
 };
@@ -296,11 +296,7 @@ function removeLocalStorageValue(key: string): void {
   }
 }
 
-type StoredProfileSelection = { ref: AgentProfileRef; source: "profile" | "legacy" };
-
-function isStoredProfileRef(value: string | null): value is AgentProfileRef {
-  return Boolean(value?.startsWith("builtin:") || value?.startsWith("global:") || value?.startsWith("project:"));
-}
+type StoredProfileSelection = { ref: AgentProfileRef; source: "legacy" };
 
 function legacyPresetProfileRef(value: string | null): AgentProfileRef | undefined {
   if (value === "none") return "builtin:no-tools";
@@ -310,12 +306,7 @@ function legacyPresetProfileRef(value: string | null): AgentProfileRef | undefin
 }
 
 function readStoredProfileSelection(): StoredProfileSelection | undefined {
-  const value = readLocalStorageValue(PROFILE_STORAGE_KEY);
-  if (isStoredProfileRef(value)) {
-    removeLocalStorageValue(PROFILE_STORAGE_KEY);
-    removeLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
-    return { ref: value, source: "profile" };
-  }
+  removeLocalStorageValue(PROFILE_STORAGE_KEY);
   const legacyRef = legacyPresetProfileRef(readLocalStorageValue(TOOL_PRESET_STORAGE_KEY));
   if (legacyRef) {
     removeLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
@@ -451,64 +442,6 @@ function userMessageKey(message: Partial<AgentMessage>): string {
   });
 }
 
-type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
-
-function assistantBlockSignature(block: unknown): string {
-  if (!block || typeof block !== "object") return "";
-  const b = block as {
-    type?: unknown;
-    text?: unknown;
-    thinking?: unknown;
-    toolCallId?: unknown;
-    toolName?: unknown;
-    input?: unknown;
-    id?: unknown;
-    name?: unknown;
-    arguments?: unknown;
-  };
-  if (b.type === "text") return typeof b.text === "string" ? b.text : "";
-  if (b.type === "thinking") return typeof b.thinking === "string" ? b.thinking : "";
-  if (b.type === "toolCall") {
-    return JSON.stringify({
-      id: typeof b.toolCallId === "string" ? b.toolCallId : typeof b.id === "string" ? b.id : "",
-      name: typeof b.toolName === "string" ? b.toolName : typeof b.name === "string" ? b.name : "",
-      input: b.input ?? b.arguments ?? null,
-    });
-  }
-  return "";
-}
-
-function assistantMessageSignature(message: Partial<AgentMessage>): string {
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return "";
-  return content.map(assistantBlockSignature).filter(Boolean).join("\n");
-}
-
-function hasDisplayableAssistantContent(content: unknown): content is AssistantAgentMessage["content"] {
-  return Array.isArray(content) && content.some((block) => assistantBlockSignature(block).trim().length > 0);
-}
-
-function materializeStreamingAssistant(snapshot: Partial<AgentMessage> | null): AgentMessage | null {
-  if (!snapshot || snapshot.role !== "assistant") return null;
-  const assistant = snapshot as Partial<AssistantAgentMessage>;
-  if (!hasDisplayableAssistantContent(assistant.content)) return null;
-  return normalizeToolCalls({
-    ...assistant,
-    role: "assistant",
-    content: assistant.content,
-    model: typeof assistant.model === "string" ? assistant.model : "",
-    provider: typeof assistant.provider === "string" ? assistant.provider : "",
-    timestamp: typeof assistant.timestamp === "number" ? assistant.timestamp : Date.now(),
-    stopReason: typeof assistant.stopReason === "string" ? assistant.stopReason : "aborted",
-  } as AssistantAgentMessage);
-}
-
-function messageIncludesStreamingAssistant(message: AgentMessage, partial: AgentMessage): boolean {
-  if (message.role !== "assistant" || partial.role !== "assistant") return false;
-  const existingSignature = assistantMessageSignature(message);
-  const partialSignature = assistantMessageSignature(partial);
-  return !!partialSignature && (existingSignature === partialSignature || existingSignature.startsWith(partialSignature));
-}
 
 function readCompactResult(result: unknown, reason: string): CompactResultInfo | null {
   if (!result || typeof result !== "object") return null;
@@ -632,7 +565,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [entryIds, setEntryIds] = useState<string[]>([]);
-  const [streamState, rawDispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
+  const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
   const [agentRunning, setAgentRunning] = useState(false);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
   const [modelList, setModelList] = useState<ModelEntry[]>([]);
@@ -655,6 +588,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(() => readStoredThinkingLevel());
   const [newSessionDefaultThinkingLevel, setNewSessionDefaultThinkingLevel] = useState<ThinkingLevelOption>(FALLBACK_THINKING_LEVEL);
   const [profileSwitchSupported, setProfileSwitchSupported] = useState(isNew);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileMissing, setProfileMissing] = useState(false);
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -698,25 +633,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
-  const streamingMessageRef = useRef<Partial<AgentMessage> | null>(null);
   const liveContextUsageRefreshInFlightRef = useRef(false);
   const lastLiveContextUsageRefreshAtRef = useRef(0);
   const pendingLiveContextUsageRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newSessionThinkingOverrideRef = useRef(false);
-  const runtimeProfileMissingRef = useRef(false);
-  const dispatch = useCallback((action: StreamAction) => {
-    if (action.type === "update") streamingMessageRef.current = action.message;
-    else streamingMessageRef.current = null;
-    rawDispatch(action);
-  }, [rawDispatch]);
-
-  const preserveStreamingMessage = useCallback((snapshot: Partial<AgentMessage> | null = streamingMessageRef.current) => {
-    const preserved = materializeStreamingAssistant(snapshot);
-    if (!preserved) return;
-    setMessages((prev) => prev.some((message) => messageIncludesStreamingAssistant(message, preserved))
-      ? prev
-      : [...prev, preserved]);
-  }, []);
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const profileCwd = newSessionCwd ?? session?.cwd ?? null;
@@ -770,9 +690,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (cancelled) return;
         setProfilesResponse(data);
         setActiveProfileRef((current) => {
-          if (runtimeProfileMissingRef.current) return undefined;
           const currentExists = current && data.profiles.some((profile) => profile.ref === current);
           if (isNew) {
+            if (sessionIdRef.current) return current ?? data.effectiveDefaultProfileRef;
             if (newSessionProfileOverrideRef.current) return currentExists ? current : data.effectiveDefaultProfileRef;
             if (initialProfileSelectionSourceRef.current) {
               initialProfileSelectionSourceRef.current = null;
@@ -782,7 +702,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           }
           if (currentExists) return current;
           if (session && current) return current;
-          return data.effectiveDefaultProfileRef;
+          return current;
         });
       } catch (error) {
         if (!cancelled) console.error("Failed to load profiles:", error);
@@ -851,7 +771,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   })();
 
-  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
+  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, shouldApply?: () => boolean) => {
     try {
       if (showLoading) setLoading(true);
       const url = includeState
@@ -859,6 +779,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : `/api/sessions/${encodeURIComponent(sid)}`;
       const res = await fetch(url);
       if (res.status === 404) {
+        if (shouldApply && !shouldApply()) return null;
         if (showLoading) {
           setData(null);
           setActiveLeafId(null);
@@ -869,6 +790,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json() as SessionData & { agentState?: { running: boolean; state?: AgentStateResponse } };
+      if (shouldApply && !shouldApply()) return null;
       setData(d);
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
@@ -881,12 +803,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (liveState.model) setCurrentModelOverride({ provider: liveState.model.provider, modelId: liveState.model.id });
         if (liveState.profile !== undefined) {
           setProfileSwitchSupported(true);
-          if (liveState.profile?.ref) {
-            runtimeProfileMissingRef.current = false;
-            setActiveProfileRef(liveState.profile.ref);
-          } else {
-            runtimeProfileMissingRef.current = true;
+          if (liveState.profile === null) {
+            setProfileError(null);
+            setProfileMissing(false);
             setActiveProfileRef(undefined);
+          } else {
+            setProfileError(liveState.profile?.error ?? null);
+            setProfileMissing(Boolean(liveState.profile?.missing));
+            if (liveState.profile?.ref) setActiveProfileRef(liveState.profile.ref);
           }
         }
         if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
@@ -971,6 +895,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const result = await res.json() as { sessionId: string };
       const realId = result.sessionId;
       sessionIdRef.current = realId;
+      try {
+        const state = await sendAgentCommand<AgentStateResponse>(realId, { type: "get_state" });
+        setProfileSwitchSupported(true);
+        if (state.profile === null) {
+          setProfileError(null);
+          setProfileMissing(false);
+          setActiveProfileRef(undefined);
+        } else {
+          setProfileError(state.profile?.error ?? null);
+          setProfileMissing(Boolean(state.profile?.missing));
+          if (state.profile?.ref) setActiveProfileRef(state.profile.ref);
+        }
+        if (state.model) setCurrentModelOverride({ provider: state.model.provider, modelId: state.model.id });
+        if (state.thinkingLevel !== undefined) setThinkingLevel((state.thinkingLevel as ThinkingLevelOption) ?? "auto");
+        applyContextUsageFromState(state);
+        applyOpenAIFastFromState(state);
+        applyExtensionUiFromState(state);
+      } catch (error) {
+        console.warn("Failed to sync new session profile state:", error);
+      }
       return realId;
     })();
 
@@ -980,7 +924,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, newSessionModel, activeProfileRef, activeProfile?.thinkingLevel, profilesResponse, thinkingLevel]);
+  }, [isNew, newSessionCwd, newSessionModel, activeProfileRef, activeProfile?.thinkingLevel, profilesResponse, thinkingLevel, applyContextUsageFromState, applyOpenAIFastFromState, applyExtensionUiFromState]);
 
   const loadSlashCommands = useCallback(async () => {
     const sid = sessionIdRef.current ?? await ensureNewSession();
@@ -1218,11 +1162,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Bail out before loadSession too: a stale finish for a previous run
     // must not overwrite the messages of the run currently streaming.
     if (runId !== undefined && promptRunIdRef.current !== runId) return;
-    const streamingSnapshot = streamingMessageRef.current;
     try {
-      if (sid) await loadSession(sid, false, true);
+      if (sid) await loadSession(sid, false, true, runId === undefined ? undefined : () => promptRunIdRef.current === runId && sessionIdRef.current === sid);
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
-      preserveStreamingMessage(streamingSnapshot);
     } finally {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       optimisticUserMessageKeyRef.current = null;
@@ -1235,7 +1177,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
       onAgentEnd?.();
     }
-  }, [dispatch, loadSession, onAgentEnd, preserveStreamingMessage]);
+  }, [dispatch, loadSession, onAgentEnd]);
 
   const waitForPromptSettlement = useCallback(async (sid: string, runId?: number) => {
     await delay(PROMPT_SETTLE_INITIAL_DELAY_MS);
@@ -1401,7 +1343,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // A late agent_end can arrive over SSE after reconcileAgentState
         // already finished this run — don't re-trigger completion.
         if (!agentRunningRef.current) break;
-        const streamingSnapshot = streamingMessageRef.current;
+        const endedRunId = promptRunIdRef.current;
         agentRunningRef.current = false;
         setAgentRunning(false);
         setAgentPhase(null);
@@ -1411,11 +1353,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const sid = sessionIdRef.current;
         if (sid) {
           void (async () => {
-            await loadSession(sid);
-            preserveStreamingMessage(streamingSnapshot);
+            const stillSameEndedRun = () => promptRunIdRef.current === endedRunId && sessionIdRef.current === sid && !agentRunningRef.current;
+            await loadSession(sid, false, false, stillSameEndedRun);
             try {
               const r = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
               const d = await r.json() as { state?: AgentStateResponse };
+              if (!stillSameEndedRun()) return;
               applyContextUsageFromState(d.state);
               applyOpenAIFastFromState(d.state);
               applyExtensionUiFromState(d.state);
@@ -1426,8 +1369,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               // Best-effort post-run state refresh.
             }
           })();
-        } else {
-          preserveStreamingMessage(streamingSnapshot);
         }
         onAgentEnd?.();
         break;
@@ -1565,7 +1506,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, dispatch, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, preserveStreamingMessage, requestLiveContextUsageRefresh]);
+  }, [addNotice, applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState, dispatch, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, requestLiveContextUsageRefresh]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -2153,7 +2094,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     }
     if (!sid) {
-      runtimeProfileMissingRef.current = false;
+      setProfileError(null);
+      setProfileMissing(false);
       if (isNew) newSessionProfileOverrideRef.current = true;
       setActiveProfileRef(profileRef);
       return;
@@ -2161,7 +2103,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       const result = await sendAgentCommand<{ profileRef?: AgentProfileRef; profileName?: string }>(sid, { type: "set_profile", profileRef });
       const appliedRef = result?.profileRef ?? profileRef;
-      runtimeProfileMissingRef.current = false;
+      setProfileError(null);
+      setProfileMissing(false);
       if (isNew) newSessionProfileOverrideRef.current = true;
       setActiveProfileRef(appliedRef);
       await loadSession(sid, false, true);
@@ -2333,7 +2276,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, thinkingLevel, profilesResponse, profileOptions, activeProfileRef, activeProfile, profileSwitchSupported,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, thinkingLevel, profilesResponse, profileOptions, activeProfileRef, activeProfile, profileSwitchSupported, profileError, profileMissing,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,

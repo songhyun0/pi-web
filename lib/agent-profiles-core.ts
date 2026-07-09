@@ -783,7 +783,6 @@ function writeProfilesSettings(store: WritableProfilesStore): void {
   store.agentProfiles.version = 1;
   store.agentProfiles.profiles = store.profiles;
   const settingsRoot = store.scope === "global" ? store.response.agentDir : store.response.cwd;
-  assertSafeSettingsWritePath(store.settingsPath, settingsRoot);
   const settingsExistedBeforeWrite = existsSync(store.settingsPath);
   withSettingsFileLock(store.settingsPath, settingsRoot, (current) => {
     assertSafeSettingsWritePath(store.settingsPath, settingsRoot);

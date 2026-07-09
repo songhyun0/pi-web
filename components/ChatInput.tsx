@@ -49,6 +49,8 @@ interface Props {
   compactResult?: CompactResultInfo | null;
   profiles?: ResolvedAgentProfile[];
   activeProfileRef?: AgentProfileRef;
+  profileError?: string | null;
+  profileMissing?: boolean;
   onProfileChange?: (profileRef: AgentProfileRef) => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   onThinkingLevelChange?: (level: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh") => void;
@@ -207,7 +209,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, onModelChange,
   showOpenAIFastToggle, openAIFastStatus, openAIFastEligible, onOpenAIFastToggle,
-  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, profiles = [], activeProfileRef, onProfileChange,
+  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, profiles = [], activeProfileRef, profileError, profileMissing, onProfileChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
@@ -1024,7 +1026,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return thinkingLevelMap[lvl] ?? lvl;
   })();
   const activeProfile = profiles.find((profile) => profile.ref === activeProfileRef);
-  const profileLabel = activeProfile?.name ?? (activeProfileRef ? activeProfileRef.replace(/^builtin:/, "") : "No profile");
+  const profileUnavailable = Boolean(profileError || profileMissing || (profiles.length > 0 && activeProfileRef && !activeProfile));
+  const profileLabel = profileUnavailable ? "Profile missing" : activeProfile?.name ?? (activeProfileRef ? activeProfileRef.replace(/^builtin:/, "") : "No profile");
   const normalizedOpenAIFastStatus = (openAIFastStatus ?? "").toLowerCase();
   const openAIFastActive = normalizedOpenAIFastStatus.includes("fast")
     && !normalizedOpenAIFastStatus.includes("unavailable")
@@ -2089,7 +2092,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <button
                   onClick={() => !isStreaming && setProfileDropdownOpen((v) => !v)}
                   disabled={isStreaming}
-                  title={`Change profile: ${profileLabel}`}
+                  title={profileError ? `${profileLabel}: ${profileError}` : `Change profile: ${profileLabel}`}
                   aria-label="Change profile"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
@@ -2125,9 +2128,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     position: "absolute", bottom: "calc(100% + 6px)", right: 0,
                     zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
                     borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 220, maxWidth: 320,
+                    overflowX: "hidden", overflowY: "auto", minWidth: 220, maxWidth: 320, maxHeight: "min(360px, calc(100vh - 160px))",
                   }}>
-                    {!activeProfileRef && (
+                    {profileUnavailable && (
+                      <div style={{ display: "grid", gap: 2, width: "100%", padding: "8px 12px", color: "#f87171", fontSize: 12, borderBottom: profiles.length ? "1px solid var(--border)" : "none" }}>
+                        <span style={{ fontWeight: 600 }}>Profile unavailable</span>
+                        <span style={{ color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis" }}>{profileError ?? activeProfileRef ?? "No active profile"}</span>
+                      </div>
+                    )}
+                    {!profileUnavailable && !activeProfileRef && (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 12px", color: "var(--text)", fontSize: 12, fontWeight: 600, borderBottom: profiles.length ? "1px solid var(--border)" : "none" }}>
                         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
                         <span style={{ flex: 1 }}>No active profile</span>

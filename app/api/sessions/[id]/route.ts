@@ -161,6 +161,7 @@ export async function GET(
       : null;
     let persistedProfileModel: { id: string; provider: string } | undefined;
     let persistedProfileThinkingLevel: string | undefined;
+    let persistedProfileError: string | undefined;
     const persistedProfileRef = normalizeAgentProfileRef(persistedProfileData?.profileRef);
     if (persistedProfileRef && header?.cwd) {
       try {
@@ -172,7 +173,9 @@ export async function GET(
           persistedProfileThinkingLevel = profile.thinkingLevel;
         }
       } catch (error) {
-        console.warn("[pi-web] failed to resolve persisted profile state", error instanceof Error ? error.message : String(error));
+        const detail = error instanceof Error ? error.message : String(error);
+        persistedProfileError = `Failed to restore profile ${persistedProfileRef}: ${detail}`;
+        console.warn("[pi-web] failed to resolve persisted profile state", detail);
       }
     }
 
@@ -187,7 +190,10 @@ export async function GET(
         agentState = {
           running: false,
           state: {
-            profile: persistedProfile,
+            profile: persistedProfile ? {
+              ...persistedProfile,
+              ...(persistedProfileError ? { error: persistedProfileError, missing: true } : {}),
+            } : null,
             ...(persistedProfileModel ? { model: persistedProfileModel } : {}),
             ...(persistedProfileThinkingLevel ? { thinkingLevel: persistedProfileThinkingLevel } : {}),
             extensionStatuses: [],

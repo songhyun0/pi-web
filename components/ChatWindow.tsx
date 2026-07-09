@@ -181,7 +181,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
   const {
     data, activeLeafId,
     loading, error, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, profileOptions, activeProfileRef, profileSwitchSupported,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, profileOptions, activeProfileRef, profileSwitchSupported, profileError, profileMissing,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -347,6 +347,8 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       compactResult={compactResult}
       profiles={profileOptions}
       activeProfileRef={activeProfileRef}
+      profileError={profileError}
+      profileMissing={profileMissing}
       onProfileChange={isNew || profileSwitchSupported ? handleProfileChange : undefined}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
