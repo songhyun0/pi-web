@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveSessionPath } from "@/lib/session-reader";
-import { stripProfileStateNodes, visibleProfileLeafId } from "@/lib/profile-session-state";
+
 async function openSession(id: string) {
   const filePath = await resolveSessionPath(id);
   if (!filePath) return null;
@@ -21,8 +21,8 @@ export async function GET(
 
     return NextResponse.json({
       sessionId: id,
-      leafId: visibleProfileLeafId(sm, sm.getLeafId()),
-      tree: stripProfileStateNodes(sm.getTree()),
+      leafId: sm.getLeafId(),
+      tree: sm.getTree(),
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -52,11 +52,11 @@ export async function PATCH(
     const labelEntryId = sm.appendLabelChange(targetId, normalizedLabel);
     return NextResponse.json({
       sessionId: id,
-      leafId: visibleProfileLeafId(sm, sm.getLeafId()),
+      leafId: sm.getLeafId(),
       labelEntryId,
       targetId,
       label: normalizedLabel,
-      tree: stripProfileStateNodes(sm.getTree()),
+      tree: sm.getTree(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

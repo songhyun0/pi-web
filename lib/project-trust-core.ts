@@ -35,8 +35,7 @@ export interface ProjectTrustInventoryItem {
     | "pi-themes"
     | "pi-system-prompt"
     | "pi-append-system-prompt"
-    | "project-packages"
-    | "project-agent-profiles";
+    | "project-packages";
   label: string;
   path: string;
   exists: boolean;
@@ -162,38 +161,6 @@ function collectProjectPackages(settingsPath: string): ProjectTrustInventoryItem
     ...(packages.length ? { details: packages } : {}),
   };
 }
-function collectProjectAgentProfiles(settingsPath: string): ProjectTrustInventoryItem {
-  const parsed = readJsonObject(settingsPath);
-  const agentProfiles = parsed?.agentProfiles;
-  const profilesValue = agentProfiles && typeof agentProfiles === "object" && !Array.isArray(agentProfiles)
-    ? (agentProfiles as { profiles?: unknown; defaultProfileRef?: unknown }).profiles
-    : undefined;
-  const profiles = Array.isArray(profilesValue)
-    ? profilesValue
-      .map((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
-        const profile = entry as { id?: unknown; name?: unknown };
-        const id = typeof profile.id === "string" ? profile.id : undefined;
-        const name = typeof profile.name === "string" ? profile.name : undefined;
-        if (name && id) return `${name} (${id})`;
-        return name ?? id;
-      })
-      .filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const defaultProfileRef = agentProfiles && typeof agentProfiles === "object" && !Array.isArray(agentProfiles) && typeof (agentProfiles as { defaultProfileRef?: unknown }).defaultProfileRef === "string"
-    ? (agentProfiles as { defaultProfileRef: string }).defaultProfileRef
-    : undefined;
-  const details = defaultProfileRef ? [...profiles, `Default profile (${defaultProfileRef})`] : profiles;
-  return {
-    kind: "project-agent-profiles",
-    label: "Project agent profiles from .pi/settings.json",
-    path: settingsPath,
-    exists: details.length > 0,
-    count: details.length,
-    requiresTrust: details.length > 0,
-    ...(details.length ? { details } : {}),
-  };
-}
 
 export function collectProjectTrustInventory(cwd: string): ProjectTrustInventoryItem[] {
   const resolvedCwd = path.resolve(cwd);
@@ -208,7 +175,6 @@ export function collectProjectTrustInventory(cwd: string): ProjectTrustInventory
     item("pi-system-prompt", `${CONFIG_DIR_NAME}/SYSTEM.md`, path.join(piDir, "SYSTEM.md")),
     item("pi-append-system-prompt", `${CONFIG_DIR_NAME}/APPEND_SYSTEM.md`, path.join(piDir, "APPEND_SYSTEM.md")),
     collectProjectPackages(settingsPath),
-    collectProjectAgentProfiles(settingsPath),
     ...collectAgentsSkillDirs(resolvedCwd),
   ];
 }
@@ -234,13 +200,13 @@ function buildActions(cwd: string): ProjectTrustActionInfo[] {
     {
       action: "trust",
       label: "Trust this project",
-      description: "Allow project-local pi settings, profiles, extensions, skills, prompts, themes, and packages for this folder.",
+      description: "Allow project-local pi settings, extensions, skills, prompts, themes, and packages for this folder.",
       updates: getProjectTrustActionUpdates(resolvedCwd, "trust"),
     },
     ...(parentPath !== resolvedCwd ? [{
       action: "trust-parent" as const,
       label: `Trust parent folder (${parentPath})`,
-      description: "Allow this project and sibling projects under the parent folder, including project-local profiles and resources.",
+      description: "Allow this project and sibling projects under the parent folder, matching the CLI parent trust option.",
       updates: getProjectTrustActionUpdates(resolvedCwd, "trust-parent"),
     }] : []),
     {

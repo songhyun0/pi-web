@@ -181,7 +181,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
   const {
     data, activeLeafId,
     loading, error, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, profileOptions, activeProfileRef, profileSwitchSupported, profileError, profileMissing,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -195,7 +195,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand, handleOpenAIFastToggle,
-    handleProfileChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates,
+    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen, onSlashUiAction: handleSlashUiAction,
@@ -345,11 +345,8 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
-      profiles={profileOptions}
-      activeProfileRef={activeProfileRef}
-      profileError={profileError}
-      profileMissing={profileMissing}
-      onProfileChange={isNew || profileSwitchSupported ? handleProfileChange : undefined}
+      toolPreset={toolPreset}
+      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}

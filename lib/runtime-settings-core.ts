@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import {
   CONFIG_DIR_NAME,
@@ -7,7 +8,7 @@ import {
   SettingsManager,
   type DefaultProjectTrust,
 } from "@earendil-works/pi-coding-agent";
-import { parseSettingsForLockedWrite, readJsonObject, withSettingsFileLock } from "./settings-file-core";
+
 export type RuntimeSettingsScope = "global" | "project";
 export type RuntimeSettingType = "boolean" | "number" | "string";
 export type RuntimeSettingApplies = "immediate" | "next-request" | "reload" | "new-session";
@@ -176,6 +177,19 @@ function getProjectSettingsPath(cwd: string): string {
   return path.join(path.resolve(cwd), CONFIG_DIR_NAME, "settings.json");
 }
 
+function readJsonObject(filePath: string): JsonObject {
+  if (!existsSync(filePath)) return {};
+  const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Invalid settings file ${filePath}: expected an object`);
+  }
+  return parsed as JsonObject;
+}
+
+function writeJsonObject(filePath: string, value: JsonObject): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
 function getNested(source: JsonObject, key: string): unknown {
   let current: unknown = source;
@@ -305,31 +319,23 @@ export function patchRuntimeSettings(
     throw Object.assign(new Error("Project settings cannot be changed until the project is trusted."), { statusCode: 403 });
   }
   const settingsPath = scope === "global" ? before.scopes.global.path : before.scopes.project.path;
+  const settings = readJsonObject(settingsPath);
   const changed: string[] = [];
   const reset: string[] = [];
-  const validated: Array<{ key: string; value: unknown | null }> = [];
 
   for (const [key, rawValue] of Object.entries(updates)) {
     const descriptor = DESCRIPTOR_BY_KEY.get(key);
     if (!descriptor) throw new Error(`Unknown runtime setting: ${key}`);
     if (!descriptor.scopes.includes(scope)) throw new Error(`${key} cannot be written to ${scope} settings`);
     if (rawValue === null) {
-      validated.push({ key, value: null });
+      deleteNested(settings, key);
       reset.push(key);
       continue;
     }
-    validated.push({ key, value: validateValue(descriptor, rawValue) });
+    setNested(settings, key, validateValue(descriptor, rawValue));
     changed.push(key);
   }
 
-  const settingsRoot = scope === "global" ? before.agentDir : before.cwd;
-  withSettingsFileLock(settingsPath, settingsRoot, (current) => {
-    const settings = parseSettingsForLockedWrite(current, settingsPath);
-    for (const { key, value } of validated) {
-      if (value === null) deleteNested(settings, key);
-      else setNested(settings, key, value);
-    }
-    return `${JSON.stringify(settings, null, 2)}\n`;
-  });
+  writeJsonObject(settingsPath, settings);
   return { ...loadRuntimeSettings(resolvedCwd), changed, reset };
 }
