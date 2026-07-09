@@ -1,3 +1,27 @@
+export type {
+  AgentProfileAppliedThinkingLevel,
+  AgentProfileDiagnostic,
+  AgentProfileInstructions,
+  AgentProfileModel,
+  AgentProfilePathRef,
+  AgentProfileRef,
+  AgentProfileResources,
+  AgentProfileScope,
+  AgentProfileSessionOptions,
+  AgentProfileSource,
+  AgentProfileThinkingLevel,
+  AgentProfileTools,
+  AgentProfilesApiAction,
+  AgentProfilesMutationRequest,
+  AgentProfilesMutationResponse,
+  AgentProfilesResponse,
+  BuiltInAgentProfileId,
+  NormalizedAgentProfile,
+  ResolvedAgentProfile,
+  ResolvedAgentProfilePath,
+  StoredAgentProfile,
+} from "./agent-profiles-types";
+
 export interface SkillSearchResult {
   package: string;
   installs: string;
