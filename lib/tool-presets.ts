@@ -1,10 +1,12 @@
+import type { ToolPreset } from "./profiles";
+
+export type { ToolPreset };
+
 export interface ToolEntry {
   name: string;
   description: string;
   active: boolean;
 }
-
-export type ToolPreset = "none" | "default" | "full";
 
 export const PRESET_NONE: string[] = [];
 export const PRESET_DEFAULT: string[] = ["read", "bash", "edit", "write"];
