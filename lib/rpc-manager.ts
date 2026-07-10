@@ -275,7 +275,7 @@ export class AgentSessionWrapper {
     if (phase !== "after-session-creation") {
       const validation = validateProfileRuntimeAgainstSnapshot(this.inner, this.profileSnapshot, metadata);
       if (validation.diagnostics.length > 0) {
-        const error = this.profileRuntimeMismatch(`after ${phase}`, validation.diagnostics);
+        const error = this.profileRuntimeMismatch(phase.replaceAll("-", " "), validation.diagnostics);
         this.terminateProfileRuntime(error);
         throw error;
       }

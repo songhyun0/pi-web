@@ -217,7 +217,7 @@ function skillMatchesRef(skill: RuntimeSkillLike, ref: SkillRef): boolean {
   const sourceInfo = skill.sourceInfo;
   if (ref.scope && ref.scope !== "package") {
     if (sourceInfo?.origin === "package" || (sourceInfo?.scope && sourceInfo.scope !== ref.scope)) return false;
-    if (ref.name && skill.name !== ref.name) return false;
+    // Standalone skill identity is its canonical path and scope; frontmatter names are mutable display metadata.
     return normalizeRefPath(skill.filePath) === normalizeRefPath(ref.path);
   }
   if (sourceInfo?.source !== ref.source) return false;
