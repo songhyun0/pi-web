@@ -1,12 +1,12 @@
 import path from "node:path";
 import {
-  SettingsManager,
   type CreateAgentSessionServicesOptions,
   type ResourceDiagnostic,
+  SettingsManager,
   type Skill,
   type SourceInfo,
 } from "@earendil-works/pi-coding-agent";
-import { cloneJson, normalizeProfilePackages, type PackageSource, type SkillRef } from "./profiles";
+import { cloneJson, INCOMPLETE_TOOL_METADATA_MESSAGE, normalizeProfilePackages, type PackageSource, type SkillRef } from "./profiles";
 import type { CapabilitySnapshotV1, PluginToolSnapshot, ProfileDiagnostic, ToolConflict } from "./session-profile-store";
 
 const RESOURCE_KEYS = ["packages", "extensions", "skills", "prompts", "themes"] as const;
@@ -386,6 +386,9 @@ export function resolveProfileSnapshotToolsFromRuntime(
     }));
   return {
     ...cloneJson(snapshot),
+    diagnostics: snapshot.diagnostics.filter((diagnostic) => (
+      diagnostic.type !== "warning" || diagnostic.message !== INCOMPLETE_TOOL_METADATA_MESSAGE
+    )),
     tools: {
       ...cloneJson(snapshot.tools),
       pluginTools,

@@ -1,4 +1,4 @@
-import type { PackageSource, ProfileDefinition, ProfileRef, SkillRef } from "./profiles";
+import { INCOMPLETE_TOOL_METADATA_MESSAGE, type PackageSource, type ProfileDefinition, type ProfileRef, type SkillRef } from "./profiles";
 import type { CapabilitySnapshotV1, ProfileDiagnostic, ToolConflict } from "./session-profile-store";
 
 export const LAST_USED_PROFILE_REF_STORAGE_KEY = "pi-web-last-used-profile-ref";
@@ -57,7 +57,9 @@ export interface ProfileIssueSummary {
 }
 
 export function summarizeProfileIssues(snapshot: CapabilitySnapshotV1 | null | undefined): ProfileIssueSummary {
-  const diagnostics = snapshot?.diagnostics ?? [];
+  const diagnostics = (snapshot?.diagnostics ?? []).filter((diagnostic) => (
+    diagnostic.type !== "warning" || diagnostic.message !== INCOMPLETE_TOOL_METADATA_MESSAGE
+  ));
   const conflicts = snapshot?.tools.conflicts ?? [];
   const warningCount = diagnostics.filter((diagnostic) => diagnostic.type === "warning").length;
   const errorCount = diagnostics.filter((diagnostic) => diagnostic.type === "error").length;

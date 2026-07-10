@@ -1,5 +1,7 @@
 export type ToolPreset = "none" | "default" | "full";
 
+export const INCOMPLETE_TOOL_METADATA_MESSAGE = "Enabled extension tool metadata will be resolved from the isolated session runtime.";
+
 export type ProfileRef = `profile:${string}` | `builtin:${string}`;
 
 export type PackageSource =

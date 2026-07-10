@@ -1,13 +1,13 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import { DefaultPackageManager, getAgentDir, SettingsManager, type ResolvedResource } from "@earendil-works/pi-coding-agent";
-import { getToolNamesForPreset } from "./tool-presets";
+import { DefaultPackageManager, getAgentDir, type ResolvedResource, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { type ProfileStoreOptions, resolveProfilesFile } from "./profile-store";
 import {
-  ProfileValidationError,
   assertApiProfileDraft,
   assertProfileRef,
   cloneJson,
   createBuiltinDefaultProfile,
+  INCOMPLETE_TOOL_METADATA_MESSAGE,
   isAllowedBuiltinProfileRef,
   isBuiltinProfileRef,
   isRecord,
@@ -15,11 +15,12 @@ import {
   type PackageSource,
   type ProfileDefinition,
   type ProfileRef,
+  ProfileValidationError,
   type SkillRef,
 } from "./profiles";
-import { resolveProfilesFile, type ProfileStoreOptions } from "./profile-store";
 import { getProjectTrustStatus } from "./project-trust-core";
 import type { ProfileDiagnostic, ToolConflict } from "./session-profile-store";
+import { getToolNamesForPreset } from "./tool-presets";
 
 export interface PluginToolPreview {
   name: string;
@@ -79,7 +80,6 @@ const REGISTER_TOOL_CALL_RE = /(?:\b\w+\s*\.\s*)?registerTool\s*\(/g;
 const BRACKET_REGISTER_TOOL_RE = /\[["'`]registerTool["'`]\]\s*\(/g;
 const TOOL_HELPER_WITH_PI_CALL_RE = /\b(?:reg(?:ister)?|setup|initialize|init|create)[A-Za-z_$][\w$]*\s*\(\s*pi\b/g;
 const DYNAMIC_RESOURCE_DISCOVERY_RE = /\.on\s*\(\s*["'`]resources_discover["'`]/;
-export const INCOMPLETE_TOOL_METADATA_MESSAGE = "Enabled extension tool metadata will be resolved from the isolated session runtime.";
 
 function previewErrorFromUnknown(error: unknown): never {
   if (error instanceof ProfilePreviewError) throw error;
