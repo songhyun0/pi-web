@@ -296,6 +296,16 @@ export class AgentSessionWrapper {
     });
   }
 
+  private async withProfileToolGuardSuspended<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.profileToolGuardSuspended;
+    this.profileToolGuardSuspended = previous || Boolean(this.profileSnapshot);
+    try {
+      return await operation();
+    } finally {
+      this.profileToolGuardSuspended = previous;
+    }
+  }
+
   private ensureExtensionsBound(options: ExtensionBindingOptions = {}): Promise<void> {
     if (options.forceEmptySystemPrompt) this.forceEmptySystemPrompt = true;
     if (this.extensionsBound) {
@@ -307,36 +317,38 @@ export class AgentSessionWrapper {
     this.extensionBindingError = null;
     this.extensionBindingPromise = (async () => {
       if (!this._alive) throw this.fatalProfilePolicyError ?? new Error("Profile runtime closed during extension binding.");
-      const uiContext = this.extensionUi.createContext();
-      if (typeof this.inner.bindExtensions === "function") {
-        const bindExtensions = this.inner.bindExtensions as (bindings: {
-          uiContext?: unknown;
-          mode?: "rpc";
-          commandContextActions?: ExtensionCommandContextActionsLike;
-          shutdownHandler?: () => void;
-          onError?: (error: { extensionPath: string; event: string; error: string }) => void;
-        }) => Promise<void>;
-        await bindExtensions.call(this.inner, {
-          uiContext,
-          mode: "rpc",
-          commandContextActions: this.createExtensionCommandContextActions(),
-          shutdownHandler: () => this.emit({
-            type: "extension_ui_request",
-            id: randomUUID(),
-            method: "notify",
-            notifyType: "warning",
-            message: "Extension requested shutdown, but shutdown is not supported in pi-web.",
-          } as ExtensionUiRequest as AgentEvent),
-          onError: (error) => this.emit({
-            type: "extension_error",
-            extensionPath: error.extensionPath,
-            event: error.event,
-            error: error.error,
-          }),
-        });
-      } else {
-        this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
-      }
+      await this.withProfileToolGuardSuspended(async () => {
+        const uiContext = this.extensionUi.createContext();
+        if (typeof this.inner.bindExtensions === "function") {
+          const bindExtensions = this.inner.bindExtensions as (bindings: {
+            uiContext?: unknown;
+            mode?: "rpc";
+            commandContextActions?: ExtensionCommandContextActionsLike;
+            shutdownHandler?: () => void;
+            onError?: (error: { extensionPath: string; event: string; error: string }) => void;
+          }) => Promise<void>;
+          await bindExtensions.call(this.inner, {
+            uiContext,
+            mode: "rpc",
+            commandContextActions: this.createExtensionCommandContextActions(),
+            shutdownHandler: () => this.emit({
+              type: "extension_ui_request",
+              id: randomUUID(),
+              method: "notify",
+              notifyType: "warning",
+              message: "Extension requested shutdown, but shutdown is not supported in pi-web.",
+            } as ExtensionUiRequest as AgentEvent),
+            onError: (error) => this.emit({
+              type: "extension_error",
+              extensionPath: error.extensionPath,
+              event: error.event,
+              error: error.error,
+            }),
+          });
+        } else {
+          this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
+        }
+      });
       if (this.fatalProfilePolicyError || !this._alive) {
         throw this.fatalProfilePolicyError ?? new Error("Profile runtime closed during extension binding.");
       }
