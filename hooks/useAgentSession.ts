@@ -268,7 +268,7 @@ const NOTICE_EXIT_ANIMATION_MS = 180;
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space", "Spacebar"]);
 const THINKING_LEVEL_STORAGE_KEY = "pi-web-default-thinking-level";
 const FALLBACK_THINKING_LEVEL: ThinkingLevelOption = "xhigh";
-const THINKING_LEVEL_VALUES = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVEL_VALUES = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function readLocalStorageValue(key: string): string | null {
   if (typeof window === "undefined") return null;
