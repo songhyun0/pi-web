@@ -252,7 +252,7 @@ export interface UseAgentSessionOptions {
   onNewSessionProfileSnapshot?: (snapshot: CapabilitySnapshotV1, sessionId: string) => void;
 }
 
-export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 const PROGRAMMATIC_SCROLL_IGNORE_MS = 700;
 const USER_SCROLL_INTENT_MS = 1200;
