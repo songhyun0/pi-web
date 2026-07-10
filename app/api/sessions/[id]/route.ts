@@ -9,6 +9,8 @@ import {
   listAllSessions,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { withSessionProfileMutationLock } from "@/lib/existing-session-profile-application";
+import { deleteSessionProfileSnapshot } from "@/lib/session-profile-store";
 import { getPiCodexFastModeState, loadPiCodexFastModeConfig } from "@/lib/pi-codex-fast";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
@@ -154,12 +156,13 @@ export async function GET(
     const url = new URL(req.url);
     let agentState: { running: boolean; state?: unknown } | undefined;
     if (url.searchParams.has("includeState")) {
-      const rpc = getRpcSession(id);
-      if (rpc?.isAlive()) {
-        const state = await rpc.send({ type: "get_state" });
-        agentState = { running: true, state };
-      } else {
-        agentState = {
+      agentState = await withSessionProfileMutationLock(id, async () => {
+        const rpc = getRpcSession(id);
+        if (rpc?.isAlive()) {
+          const state = await rpc.send({ type: "get_state" });
+          return { running: true, state };
+        }
+        return {
           running: false,
           state: {
             extensionStatuses: [],
@@ -169,7 +172,7 @@ export async function GET(
             openAIFastConfig: loadPiCodexFastModeConfig(),
           },
         };
-      }
+      });
     }
 
     return NextResponse.json({
@@ -216,9 +219,11 @@ export async function DELETE(
 ) {
   const { id } = await params;
   try {
-    const filePath = await resolveSessionPath(id);
+    return await withSessionProfileMutationLock(id, async () => {
+      const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+        await deleteSessionProfileSnapshot(id);
+        return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
     // Read header before deleting to get parentSession path
@@ -250,10 +255,14 @@ export async function DELETE(
       }
     } catch { /* skip if dir unreadable */ }
 
-    getRpcSession(id)?.destroy();
+    const runtime = getRpcSession(id);
+    if (runtime?.isRunning()) return NextResponse.json({ error: "Wait for the current response to finish before deleting this session." }, { status: 409 });
+    if (runtime) await runtime.shutdown();
     unlinkSync(filePath);
     invalidateSessionPathCache(id);
+    await deleteSessionProfileSnapshot(id);
     return NextResponse.json({ ok: true });
+    });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

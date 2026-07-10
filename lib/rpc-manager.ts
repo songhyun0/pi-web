@@ -1,6 +1,8 @@
-import { createAgentSessionFromServices, createAgentSessionServices, estimateTokens, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
-import { randomUUID } from "crypto";
-import { existsSync } from "fs";
+import { createAgentSessionFromServices, createAgentSessionServices, estimateTokens, getAgentDir, SessionManager, type CreateAgentSessionServicesOptions } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+import { cloneJson } from "./profiles";
 import { cacheSessionPath } from "./session-reader";
 import { loadPiBuiltinSlashCommands } from "./pi-builtin-slash-commands";
 import { ExtensionUiBridge } from "./extension-ui-bridge";
@@ -8,6 +10,14 @@ import type { SlashCommandInfo } from "./slash-command-registry";
 import type { AgentSessionLike, BashCommandResult, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse } from "./types";
 import { getPiCodexFastModeState, loadPiCodexFastModeConfig, PI_CODEX_FAST_COMMAND_NAME, PI_CODEX_FAST_PACKAGE_NAME } from "./pi-codex-fast";
+import { getProjectTrustStatus } from "./project-trust-core";
+import { applyProfileToolPolicy, createProfileScopedRuntimeOptions, getProfileRuntimeToolMetadata, validateProfileRuntimeAgainstSnapshot, type RuntimeToolMetadata } from "./profile-runtime";
+import {
+  getSessionProfileSnapshot,
+  restoreSessionProfileSnapshot,
+  setSessionProfileSnapshot,
+  type CapabilitySnapshotV1,
+} from "./session-profile-store";
 
 // ============================================================================
 // Types
@@ -33,6 +43,16 @@ type ExtensionCommandContextActionsLike = {
 type ExtensionBindingOptions = {
   forceEmptySystemPrompt?: boolean;
 };
+
+export interface StartRpcSessionRuntimeOptions {
+  profileSnapshot?: CapabilitySnapshotV1;
+  agentDir?: string;
+  settingsManager?: CreateAgentSessionServicesOptions["settingsManager"];
+  resourceLoaderOptions?: CreateAgentSessionServicesOptions["resourceLoaderOptions"];
+  resourceLoaderReloadOptions?: CreateAgentSessionServicesOptions["resourceLoaderReloadOptions"];
+  autoStart?: boolean;
+  isolateSessionFile?: boolean;
+}
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
@@ -68,6 +88,9 @@ function extractUserMessageText(content: unknown): string {
 // ============================================================================
 
 export class AgentSessionWrapper {
+  public readonly inner: AgentSessionLike;
+  private readonly profileSnapshot?: CapabilitySnapshotV1;
+  private readonly agentDir: string;
   private listeners: EventListener[] = [];
   private readonly extensionUi: ExtensionUiBridge;
   private promptRunning = false;
@@ -79,13 +102,61 @@ export class AgentSessionWrapper {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
+  private isolatedSessionFile: { originalPath: string; temporaryPath: string; initialBytes: Buffer; mode: "copy" | "move" } | null = null;
+  private shutdownPromise: Promise<void> | null = null;
+  private profileToolGuardSuspended = false;
+  private fatalProfilePolicyError: Error | null = null;
 
-  constructor(public readonly inner: AgentSessionLike) {
+  constructor(
+    inner: AgentSessionLike,
+    profileSnapshot?: CapabilitySnapshotV1,
+    agentDir = getAgentDir(),
+    isolatedSessionFile?: { originalPath: string; temporaryPath: string; initialBytes: Buffer; mode: "copy" | "move" },
+  ) {
+    this.inner = inner;
+    this.profileSnapshot = profileSnapshot;
+    this.agentDir = agentDir;
+    this.isolatedSessionFile = isolatedSessionFile ?? null;
     this.extensionUi = new ExtensionUiBridge({ emit: (event) => this.emit(event as AgentEvent) });
+    if (this.profileSnapshot) this.installProfileToolMutationGuards();
   }
 
   get sessionId(): string {
     return this.inner.sessionId;
+  }
+
+  stageSessionFileForPublication(): string {
+    if (this.isolatedSessionFile) {
+      if (this.isolatedSessionFile.mode === "move") return this.isolatedSessionFile.originalPath;
+      throw new Error("Session file is already isolated.");
+    }
+    const originalPath = this.sessionFile;
+    if (!originalPath) throw new Error("Profile-backed sessions require a durable session file before publication.");
+    const temporaryPath = `${originalPath}.profile-pending-${process.pid}-${randomUUID()}`;
+    const initialBytes = existsSync(originalPath) ? readFileSync(originalPath) : Buffer.alloc(0);
+    if (existsSync(originalPath)) renameSync(originalPath, temporaryPath);
+    (this.inner.sessionManager as unknown as { sessionFile?: string }).sessionFile = temporaryPath;
+    this.isolatedSessionFile = { originalPath, temporaryPath, initialBytes, mode: "move" };
+    return originalPath;
+  }
+
+  promoteIsolatedSessionFile(): void {
+    const isolation = this.isolatedSessionFile;
+    if (!isolation) return;
+    if (isolation.mode === "copy") {
+      const currentBytes = readFileSync(isolation.temporaryPath);
+      if (!currentBytes.equals(isolation.initialBytes)) {
+        throw new Error("Candidate extensions mutated isolated session state before profile commit.");
+      }
+    }
+    if (isolation.mode === "move") renameSync(isolation.temporaryPath, isolation.originalPath);
+    else unlinkSync(isolation.temporaryPath);
+    (this.inner.sessionManager as unknown as { sessionFile?: string }).sessionFile = isolation.originalPath;
+    this.isolatedSessionFile = null;
+  }
+
+  get capabilitySnapshot(): CapabilitySnapshotV1 | undefined {
+    return this.profileSnapshot ? cloneJson(this.profileSnapshot) : undefined;
   }
 
   get sessionFile(): string {
@@ -99,8 +170,19 @@ export class AgentSessionWrapper {
   isRunning(): boolean {
     return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting || Boolean(this.inner.isBashRunning));
   }
+  private terminateProfileRuntime(error: Error): void {
+    this.fatalProfilePolicyError ??= error;
+    try {
+      (this.inner.extensionRunner as { invalidate?: (message?: string) => void } | undefined)?.invalidate?.("Profile capability policy was violated.");
+      void this.inner.abort();
+    } catch {
+      // The normal shutdown path still disposes the runtime.
+    }
+    this.destroy();
+  }
 
   start(): void {
+    if (this.unsubscribe) return;
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
       this.emit(event);
@@ -116,9 +198,84 @@ export class AgentSessionWrapper {
     this.forceEmptySystemPrompt = force;
     this.applyForcedEmptySystemPrompt();
   }
+  private profileRuntimeMismatch(phase: string, diagnostics: unknown): Error {
+    const error = new Error(`Profile runtime capabilities do not match the immutable capability snapshot ${phase}.`);
+    (error as Error & { diagnostics?: unknown }).diagnostics = diagnostics;
+    return error;
+  }
+
+  private assertProfileRuntimeCurrent(phase: string): RuntimeToolMetadata[] | undefined {
+    if (!this.profileSnapshot || this.profileToolGuardSuspended) return undefined;
+    const metadata = getProfileRuntimeToolMetadata(this.inner, this.profileSnapshot);
+    const validation = validateProfileRuntimeAgainstSnapshot(this.inner, this.profileSnapshot, metadata);
+    if (validation.diagnostics.length > 0) {
+      const error = this.profileRuntimeMismatch(phase, validation.diagnostics);
+      this.terminateProfileRuntime(error);
+      throw error;
+    }
+    return metadata;
+  }
+
+  private installProfileToolMutationGuards(): void {
+    const expected = [...new Set(this.profileSnapshot?.tools.activeToolNames ?? [])].sort();
+    const sameExpected = (names: string[]) => {
+      const actual = [...new Set(names)].sort();
+      return actual.length === expected.length && actual.every((name, index) => name === expected[index]);
+    };
+    const originalSetActiveTools = this.inner.setActiveToolsByName.bind(this.inner);
+    this.inner.setActiveToolsByName = (names: string[]) => {
+      if (this.profileToolGuardSuspended || sameExpected(names)) {
+        originalSetActiveTools(names);
+        return;
+      }
+      originalSetActiveTools(expected);
+      const diagnostic = [{
+        type: "error",
+        message: "An extension attempted to change tools outside the immutable capability snapshot.",
+        source: this.profileSnapshot?.profileRef,
+      }];
+      const error = this.profileRuntimeMismatch("after an extension tool mutation", diagnostic);
+      this.terminateProfileRuntime(error);
+      throw error;
+    };
+
+    const runtime = this.inner as AgentSessionLike & { _refreshToolRegistry?: (...args: unknown[]) => unknown };
+    if (typeof runtime._refreshToolRegistry === "function") {
+      const originalRefresh = runtime._refreshToolRegistry.bind(runtime);
+      runtime._refreshToolRegistry = (...args: unknown[]) => {
+        const result = originalRefresh(...args);
+        if (!this.profileToolGuardSuspended) {
+          applyProfileToolPolicy(this.inner, this.profileSnapshot as CapabilitySnapshotV1);
+          this.assertProfileRuntimeCurrent("after extension tool registration");
+        }
+        return result;
+      };
+    }
+  }
+
+  applyProfileToolPolicy(phase: "after-session-creation" | "after-extension-binding" | "after-reload" = "after-session-creation"): RuntimeToolMetadata[] | undefined {
+    if (!this.profileSnapshot) return undefined;
+    const metadata = applyProfileToolPolicy(this.inner, this.profileSnapshot);
+    if (phase !== "after-session-creation") {
+      const validation = validateProfileRuntimeAgainstSnapshot(this.inner, this.profileSnapshot, metadata);
+      if (validation.diagnostics.length > 0) {
+        const error = this.profileRuntimeMismatch(`after ${phase}`, validation.diagnostics);
+        this.terminateProfileRuntime(error);
+        throw error;
+      }
+    }
+    this.forceEmptySystemPrompt = this.inner.getActiveToolNames().length === 0;
+    this.applyForcedEmptySystemPrompt();
+    if (phase === "after-reload") notifyRunningChange();
+    return metadata;
+  }
+
+  bindExtensions(options: ExtensionBindingOptions = {}): Promise<void> {
+    return this.ensureExtensionsBound(options);
+  }
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
-    void this.ensureExtensionsBound(options).catch((err) => {
+    void this.bindExtensions(options).catch((err) => {
       console.error("[pi-web] failed to dispatch session_start to extensions:", err instanceof Error ? err.message : err);
     });
   }
@@ -133,7 +290,7 @@ export class AgentSessionWrapper {
 
     this.extensionBindingError = null;
     this.extensionBindingPromise = (async () => {
-      if (!this._alive) return;
+      if (!this._alive) throw this.fatalProfilePolicyError ?? new Error("Profile runtime closed during extension binding.");
       const uiContext = this.extensionUi.createContext();
       if (typeof this.inner.bindExtensions === "function") {
         const bindExtensions = this.inner.bindExtensions as (bindings: {
@@ -164,7 +321,11 @@ export class AgentSessionWrapper {
       } else {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
+      if (this.fatalProfilePolicyError || !this._alive) {
+        throw this.fatalProfilePolicyError ?? new Error("Profile runtime closed during extension binding.");
+      }
       this.extensionsBound = true;
+      this.applyProfileToolPolicy("after-extension-binding");
       this.applyForcedEmptySystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
@@ -190,6 +351,40 @@ export class AgentSessionWrapper {
 
   private shouldWaitForExtensions(type: string): boolean {
     return type === "prompt" || type === "steer" || type === "follow_up" || type === "get_commands";
+  }
+
+  private async persistDerivedProfileSnapshot(sessionId: string, sessionFilePath: string, cwd: string): Promise<void> {
+    if (!this.profileSnapshot) return;
+    const options = { agentDir: this.agentDir };
+    const pendingPath = `${sessionFilePath}.profile-pending`;
+    renameSync(sessionFilePath, pendingPath);
+    let writeResult: Awaited<ReturnType<typeof setSessionProfileSnapshot>> | undefined;
+    try {
+      const current = await getSessionProfileSnapshot(sessionId, options);
+      if (current.state !== "legacy") throw new Error(`Derived session ${sessionId} already has a capability snapshot.`);
+      const createdAt = new Date().toISOString();
+      const snapshot: CapabilitySnapshotV1 = {
+        ...cloneJson(this.profileSnapshot),
+        snapshotId: randomUUID(),
+        createdAt,
+        cwd,
+      };
+      writeResult = await setSessionProfileSnapshot(
+        sessionId,
+        snapshot,
+        { sessionFilePath, cwd, updatedAt: createdAt },
+        current.writeToken,
+        options,
+      );
+      renameSync(pendingPath, sessionFilePath);
+    } catch (error) {
+      if (writeResult) {
+        await restoreSessionProfileSnapshot(sessionId, writeResult.previousRecord, writeResult.writeToken, options).catch(() => undefined);
+      }
+      try { unlinkSync(pendingPath); } catch { /* best-effort orphan cleanup */ }
+      try { unlinkSync(sessionFilePath); } catch { /* best-effort orphan cleanup */ }
+      throw error;
+    }
   }
 
   private async withFinalRunningNotification<T>(operation: () => Promise<T>): Promise<T> {
@@ -259,7 +454,11 @@ export class AgentSessionWrapper {
   async send(command: Record<string, unknown>): Promise<unknown> {
     this.resetIdleTimer();
     const type = command.type as string;
+    if (!this._alive) throw new Error("Session runtime is no longer available.");
     if (this.shouldWaitForExtensions(type)) await this.waitForExtensionsBound();
+    if (["prompt", "get_state", "get_tools", "get_commands"].includes(type)) {
+      this.assertProfileRuntimeCurrent(`before ${type}`);
+    }
 
     switch (type) {
       case "prompt": {
@@ -301,6 +500,7 @@ export class AgentSessionWrapper {
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",
+          profileSnapshot: this.profileSnapshot ?? null,
           isStreaming: this.inner.isStreaming,
           isPromptRunning: this.promptRunning,
           isCompacting: this.inner.isCompacting,
@@ -383,6 +583,7 @@ export class AgentSessionWrapper {
           newSessionId = sourceManager.getSessionId();
         }
 
+        await this.persistDerivedProfileSnapshot(newSessionId, newSessionFile, sessionManager.getCwd());
         cacheSessionPath(newSessionId, newSessionFile);
         this.destroy();
         return { cancelled: false, newSessionId, selectedText };
@@ -410,6 +611,7 @@ export class AgentSessionWrapper {
         if (!existsSync(newSessionFile)) throw new Error("Failed to write cloned session");
 
         const newSessionId = sourceManager.getSessionId();
+        await this.persistDerivedProfileSnapshot(newSessionId, newSessionFile, sessionManager.getCwd());
         cacheSessionPath(newSessionId, newSessionFile);
         return { cancelled: false, newSessionId };
       }
@@ -524,12 +726,14 @@ export class AgentSessionWrapper {
       }
 
       case "get_tools": {
+        if (this.profileSnapshot) return getProfileRuntimeToolMetadata(this.inner, this.profileSnapshot);
         const all: ToolInfo[] = this.inner.getAllTools();
         const active = new Set<string>(this.inner.getActiveToolNames());
         return all.map((t) => ({
           name: t.name,
           description: t.description,
           active: active.has(t.name),
+          provenance: t.sourceInfo?.source === "builtin" ? "builtin" : (t.sourceInfo ? "plugin" : "unknown"),
         }));
       }
 
@@ -588,6 +792,10 @@ export class AgentSessionWrapper {
       }
 
       case "set_tools": {
+        if (this.profileSnapshot) {
+          this.applyProfileToolPolicy("after-reload");
+          throw new Error("Profile-scoped sessions cannot change tools outside their capability snapshot.");
+        }
         const toolNames = command.toolNames as string[];
         this.setForceEmptySystemPrompt(toolNames.length === 0);
         this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
@@ -596,14 +804,23 @@ export class AgentSessionWrapper {
       }
 
       case "reload": {
-        await this.waitForExtensionsBound();
-        this.extensionUi.clearPersistentUi();
-        await this.inner.reload();
-        if (typeof this.inner.bindExtensions !== "function") {
-          this.inner.extensionRunner.setUIContext?.(this.extensionUi.createContext(), "rpc");
+        this.profileToolGuardSuspended = true;
+        try {
+          await this.waitForExtensionsBound();
+          this.extensionUi.clearPersistentUi();
+          await this.inner.reload();
+          if (typeof this.inner.bindExtensions !== "function") {
+            this.inner.extensionRunner.setUIContext?.(this.extensionUi.createContext(), "rpc");
+          }
+          this.profileToolGuardSuspended = false;
+          this.applyProfileToolPolicy("after-reload");
+          this.applyForcedEmptySystemPrompt();
+          return { success: true };
+        } catch (error) {
+          this.profileToolGuardSuspended = false;
+          if (this.profileSnapshot) this.destroy();
+          throw error;
         }
-        this.applyForcedEmptySystemPrompt();
-        return { success: true };
       }
 
       case "abort_compaction": {
@@ -651,14 +868,46 @@ export class AgentSessionWrapper {
     }
   }
 
-  destroy(): void {
-    if (!this._alive) return;
+  shutdown(reason: "quit" | "reload" | "new" | "resume" | "fork" = "quit", targetSessionFile?: string): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
     this._alive = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.unsubscribe?.();
-    this.extensionUi.destroy();
+    this.unsubscribe = null;
+    this.emit({ type: "runtime_closed", reason });
     this.onDestroyCallback?.();
     notifyRunningChange();
+
+    this.shutdownPromise = (async () => {
+      try {
+        const runner = this.inner.extensionRunner as {
+          emit?: (event: { type: "session_shutdown"; reason: "quit" | "reload" | "new" | "resume" | "fork"; targetSessionFile?: string }) => Promise<unknown>;
+          invalidate?: (message?: string) => void;
+        } | undefined;
+        await runner?.emit?.({ type: "session_shutdown", reason, ...(targetSessionFile ? { targetSessionFile } : {}) });
+        runner?.invalidate?.("Profile runtime was shut down.");
+      } catch (error) {
+        console.error("[pi-web] extension session_shutdown failed:", error instanceof Error ? error.message : error);
+      } finally {
+        try {
+          if (this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning) await this.inner.abort();
+        } catch {
+          // Continue with disposal even if an in-flight operation cannot be cleanly aborted.
+        }
+        if (this.isolatedSessionFile) {
+          try { unlinkSync(this.isolatedSessionFile.temporaryPath); } catch { /* already removed */ }
+          this.isolatedSessionFile = null;
+        }
+        (this.inner as { dispose?: () => void }).dispose?.();
+        this.extensionUi.destroy();
+        this.listeners = [];
+      }
+    })();
+    return this.shutdownPromise;
+  }
+
+  destroy(): void {
+    void this.shutdown();
   }
 
 
@@ -682,6 +931,7 @@ export class AgentSessionWrapper {
             this.inner.extensionRunner.setUIContext?.(this.extensionUi.createContext(), "rpc");
           },
         });
+        this.applyProfileToolPolicy("after-reload");
         this.applyForcedEmptySystemPrompt();
       },
     };
@@ -701,7 +951,7 @@ declare global {
 function getRegistry(): Map<string, AgentSessionWrapper> {
   if (!globalThis.__piSessions) {
     globalThis.__piSessions = new Map();
-    const cleanup = () => globalThis.__piSessions?.forEach((s) => s.destroy());
+    const cleanup = () => globalThis.__piSessions?.forEach((session) => { session.destroy(); });
     process.once("exit", cleanup);
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
@@ -763,6 +1013,192 @@ export function notifyRunningChange(): void {
   }
 }
 
+async function createRpcSessionWrapper(
+  sessionFile: string,
+  cwd: string,
+  toolNames?: string[],
+  runtimeOptions: StartRpcSessionRuntimeOptions = {},
+): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
+  const agentDir = runtimeOptions.agentDir ?? getAgentDir();
+  const canonicalCwd = realpathSync(resolvePath(cwd));
+  const profileSnapshot = runtimeOptions.profileSnapshot;
+  const profileRuntime = profileSnapshot
+    ? createProfileScopedRuntimeOptions({
+        cwd: canonicalCwd,
+        agentDir,
+        snapshot: profileSnapshot,
+        projectTrusted: getProjectTrustStatus(canonicalCwd, agentDir).effective.trusted,
+      })
+    : undefined;
+
+  let isolatedSessionFile: { originalPath: string; temporaryPath: string; initialBytes: Buffer; mode: "copy" | "move" } | undefined;
+  let sessionFileForOpen = sessionFile;
+  if (sessionFile && runtimeOptions.isolateSessionFile) {
+    const originalPath = realpathSync(sessionFile);
+    const temporaryPath = `${originalPath}.profile-candidate-${process.pid}-${randomUUID()}`;
+    copyFileSync(originalPath, temporaryPath);
+    isolatedSessionFile = { originalPath, temporaryPath, initialBytes: readFileSync(temporaryPath), mode: "copy" };
+    sessionFileForOpen = temporaryPath;
+  }
+  try {
+  const sessionManager = sessionFileForOpen
+    ? SessionManager.open(sessionFileForOpen, undefined)
+    : SessionManager.create(canonicalCwd, undefined);
+  if (!sessionFileForOpen && profileSnapshot) {
+    const generatedSessionFile = sessionManager.getSessionFile();
+    if (!generatedSessionFile) throw new Error("Profile-backed sessions require a generated session file path.");
+    const originalPath = resolvePath(generatedSessionFile);
+    const temporaryPath = `${originalPath}.profile-pending-${process.pid}-${randomUUID()}`;
+    (sessionManager as unknown as { sessionFile?: string }).sessionFile = temporaryPath;
+    isolatedSessionFile = { originalPath, temporaryPath, initialBytes: Buffer.alloc(0), mode: "move" };
+  }
+  if (profileSnapshot && profileSnapshot.cwd !== canonicalCwd) {
+    throw new Error(`Profile snapshot cwd '${profileSnapshot.cwd}' does not match runtime cwd '${canonicalCwd}'.`);
+  }
+  const sessionManagerCwd = realpathSync(resolvePath(sessionManager.getCwd()));
+  if (sessionManagerCwd !== canonicalCwd) {
+    throw new Error(`Session file cwd '${sessionManagerCwd}' does not match runtime cwd '${canonicalCwd}'.`);
+  }
+
+  // Determine which tools to pass based on requested toolNames.
+  // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
+  let toolsOption: string[] | undefined;
+  if (!profileSnapshot && toolNames !== undefined) {
+    // toolNames === [] -> "all off" (an empty allow-list disables every tool).
+    // Otherwise DO NOT pass a builtin-only allow-list: passing CODING_TOOL_NAMES
+    // set allowedToolNames to coding builtins only, which filtered every
+    // extension/package-provided tool (e.g. subagents, web access) out of the
+    // tool registry — so they were unavailable in pi-web sessions even though the
+    // `pi` CLI keeps them. Leaving the allow-list unset lets the SDK register all
+    // tools (and activate extension tools); we narrow the ACTIVE set below.
+    toolsOption = toolNames.length === 0 ? [] : undefined;
+  }
+
+  // Build services first so extension-registered providers are available
+  // before the SDK restores the saved model from the session file. For
+  // profile-backed sessions the profile-scoped settings manager is supplied
+  // here, before resourceLoader.reload() can load packages/resources.
+  const services = await createAgentSessionServices({
+    cwd: canonicalCwd,
+    agentDir,
+    ...(runtimeOptions.settingsManager || profileRuntime?.settingsManager
+      ? { settingsManager: runtimeOptions.settingsManager ?? profileRuntime?.settingsManager }
+      : {}),
+    resourceLoaderOptions: {
+      ...(profileRuntime?.resourceLoaderOptions ?? {}),
+      ...(runtimeOptions.resourceLoaderOptions ?? {}),
+    },
+    ...(runtimeOptions.resourceLoaderReloadOptions
+      ? { resourceLoaderReloadOptions: runtimeOptions.resourceLoaderReloadOptions }
+      : {}),
+  });
+  const created = await createAgentSessionFromServices({
+    services,
+    sessionManager,
+    ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+  });
+  const inner = created.session;
+  if (profileSnapshot) {
+    const diagnostics = [
+      ...services.diagnostics.filter((item) => item.type === "error").map((item) => ({ type: "error" as const, message: item.message, source: profileSnapshot.profileRef })),
+      ...created.extensionsResult.errors.map((item) => ({ type: "error" as const, message: item.error, source: item.path, path: item.path })),
+    ];
+    if (diagnostics.length > 0) {
+      inner.dispose();
+      if (isolatedSessionFile) {
+        try { unlinkSync(isolatedSessionFile.temporaryPath); } catch { /* already removed */ }
+      }
+      const error = new Error("Profile runtime failed to load selected extension capabilities.");
+      (error as Error & { diagnostics?: unknown }).diagnostics = diagnostics;
+      throw error;
+    }
+  }
+  if (isolatedSessionFile?.mode === "copy") isolatedSessionFile.initialBytes = readFileSync(isolatedSessionFile.temporaryPath);
+
+  // If specific tool names were requested (non-empty), set the active tools to the
+  // requested builtin coding tools PLUS all extension/package tools, so installed
+  // extensions stay usable in pi-web just like in the `pi` CLI.
+  if (!profileSnapshot && toolNames && toolNames.length > 0) {
+    inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
+  }
+
+  const wrapper = new AgentSessionWrapper(inner, profileSnapshot, agentDir, isolatedSessionFile);
+  // When all tools are disabled, clear the system prompt entirely.
+  // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
+  // keep this forced after extension resource discovery and reloads as well.
+  if (profileSnapshot) {
+    wrapper.applyProfileToolPolicy("after-session-creation");
+  } else if (toolNames?.length === 0) {
+    wrapper.setForceEmptySystemPrompt(true);
+  }
+  if (runtimeOptions.autoStart !== false) wrapper.start();
+
+  const realSessionId = inner.sessionId as string;
+  return { session: wrapper, realSessionId };
+  } catch (error) {
+    if (isolatedSessionFile) {
+      try { unlinkSync(isolatedSessionFile.temporaryPath); } catch { /* already removed */ }
+    }
+    throw error;
+  }
+}
+
+export async function createUnregisteredRpcSession(
+  cwd: string,
+  toolNames?: string[],
+  runtimeOptions: StartRpcSessionRuntimeOptions = {},
+): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
+  return createRpcSessionWrapper("", cwd, toolNames, { ...runtimeOptions, autoStart: runtimeOptions.autoStart ?? false });
+}
+
+export async function createUnregisteredRpcSessionFromFile(
+  sessionFile: string,
+  cwd: string,
+  toolNames?: string[],
+  runtimeOptions: StartRpcSessionRuntimeOptions = {},
+): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
+  return createRpcSessionWrapper(sessionFile, cwd, toolNames, { ...runtimeOptions, autoStart: runtimeOptions.autoStart ?? false });
+}
+
+export function registerRpcSession(realSessionId: string, session: AgentSessionWrapper): void {
+  if (!session.isAlive()) throw new Error(`Cannot register closed session ${realSessionId}`);
+  const registry = getRegistry();
+  const existing = registry.get(realSessionId);
+  if (existing?.isAlive() && existing !== session) {
+    throw new Error(`Session ${realSessionId} is already registered`);
+  }
+  session.onDestroy(() => {
+    if (registry.get(realSessionId) === session) registry.delete(realSessionId);
+  });
+  session.start();
+  if (session.sessionFile) cacheSessionPath(realSessionId, session.sessionFile);
+  registry.set(realSessionId, session);
+  notifyRunningChange();
+}
+
+export function replaceRpcSession(realSessionId: string, session: AgentSessionWrapper): AgentSessionWrapper | undefined {
+  if (!session.isAlive()) throw new Error(`Cannot replace session ${realSessionId} with a closed runtime`);
+  const registry = getRegistry();
+  const previous = registry.get(realSessionId);
+  if (previous === session) return previous;
+  session.onDestroy(() => {
+    if (registry.get(realSessionId) === session) registry.delete(realSessionId);
+  });
+  session.start();
+  if (session.sessionFile) cacheSessionPath(realSessionId, session.sessionFile);
+  registry.set(realSessionId, session);
+  notifyRunningChange();
+  return previous;
+}
+
+export function unregisterRpcSession(realSessionId: string, session?: AgentSessionWrapper): void {
+  const registry = getRegistry();
+  const existing = registry.get(realSessionId);
+  if (!session || existing === session) registry.delete(realSessionId);
+  session?.destroy();
+  notifyRunningChange();
+}
+
 /**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
@@ -772,72 +1208,52 @@ export async function startRpcSession(
   sessionId: string,
   sessionFile: string,
   cwd: string,
-  toolNames?: string[]
+  toolNames?: string[],
+  runtimeOptions: StartRpcSessionRuntimeOptions = {},
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
 
   const existing = registry.get(sessionId);
-  if (existing?.isAlive()) return { session: existing, realSessionId: sessionId };
+  if (existing?.isAlive()) {
+    const expectedSnapshotId = runtimeOptions.profileSnapshot?.snapshotId;
+    const liveSnapshotId = existing.capabilitySnapshot?.snapshotId;
+    if (expectedSnapshotId !== liveSnapshotId) {
+      await existing.shutdown();
+      throw new Error(`Live session ${sessionId} does not match its persisted capability snapshot.`);
+    }
+    return { session: existing, realSessionId: sessionId };
+  }
 
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
 
   const starting = (async () => {
-    const agentDir = getAgentDir();
-
-    const sessionManager = sessionFile
-      ? SessionManager.open(sessionFile, undefined)
-      : SessionManager.create(cwd, undefined);
-
-    // Determine which tools to pass based on requested toolNames.
-    // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
-    let toolsOption: string[] | undefined;
-    if (toolNames !== undefined) {
-      // toolNames === [] -> "all off" (an empty allow-list disables every tool).
-      // Otherwise DO NOT pass a builtin-only allow-list: passing CODING_TOOL_NAMES
-      // set allowedToolNames to coding builtins only, which filtered every
-      // extension/package-provided tool (e.g. subagents, web access) out of the
-      // tool registry — so they were unavailable in pi-web sessions even though the
-      // `pi` CLI keeps them. Leaving the allow-list unset lets the SDK register all
-      // tools (and activate extension tools); we narrow the ACTIVE set below.
-      toolsOption = toolNames.length === 0 ? [] : undefined;
+    const profileSnapshot = runtimeOptions.profileSnapshot;
+    let result: { session: AgentSessionWrapper; realSessionId: string } | undefined;
+    try {
+      result = await createRpcSessionWrapper(sessionFile, cwd, toolNames, {
+        ...runtimeOptions,
+        autoStart: profileSnapshot ? false : runtimeOptions.autoStart,
+      });
+      if (sessionFile && result.realSessionId !== sessionId) {
+        await result.session.shutdown();
+        throw new Error(`Session file identity '${result.realSessionId}' does not match requested session '${sessionId}'.`);
+      }
+      if (profileSnapshot) {
+        await result.session.bindExtensions({
+          forceEmptySystemPrompt: result.session.inner.getActiveToolNames().length === 0,
+        });
+      }
+      registerRpcSession(result.realSessionId, result.session);
+      if (!profileSnapshot) {
+        result.session.beginExtensionBinding({ forceEmptySystemPrompt: toolNames?.length === 0 });
+      }
+      return result;
+    } catch (error) {
+      await result?.session.shutdown();
+      throw error;
     }
-
-    // Build services first so extension-registered providers are available
-    // before the SDK restores the saved model from the session file.
-    const services = await createAgentSessionServices({ cwd, agentDir });
-    const { session: inner } = await createAgentSessionFromServices({
-      services,
-      sessionManager,
-      ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
-    });
-
-    // If specific tool names were requested (non-empty), set the active tools to the
-    // requested builtin coding tools PLUS all extension/package tools, so installed
-    // extensions stay usable in pi-web just like in the `pi` CLI.
-    if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
-    }
-
-    const wrapper = new AgentSessionWrapper(inner);
-    // When all tools are disabled, clear the system prompt entirely.
-    // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
-    // keep this forced after extension resource discovery and reloads as well.
-    if (toolNames?.length === 0) {
-      wrapper.setForceEmptySystemPrompt(true);
-    }
-    wrapper.start();
-
-    const realSessionId = inner.sessionId as string;
-    const realSessionFile = inner.sessionFile as string | undefined;
-    if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
-
-    wrapper.onDestroy(() => registry.delete(realSessionId));
-    registry.set(realSessionId, wrapper);
-    wrapper.beginExtensionBinding({ forceEmptySystemPrompt: toolNames?.length === 0 });
-
-    return { session: wrapper, realSessionId };
   })().finally(() => locks.delete(sessionId));
 
   locks.set(sessionId, starting);

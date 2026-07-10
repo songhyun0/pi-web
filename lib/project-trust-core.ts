@@ -279,9 +279,9 @@ function resolveEffectiveTrust(
   };
 }
 
-export function getProjectTrustStatus(cwd: string): ProjectTrustStatus {
+export function getProjectTrustStatus(cwd: string, agentDirOverride?: string): ProjectTrustStatus {
   const resolvedCwd = path.resolve(cwd);
-  const agentDir = getAgentDir();
+  const agentDir = agentDirOverride ?? getAgentDir();
   const settingsManager = SettingsManager.create(resolvedCwd, agentDir, { projectTrusted: false });
   const defaultProjectTrust = settingsManager.getDefaultProjectTrust();
   const trustStore = new ProjectTrustStore(agentDir);

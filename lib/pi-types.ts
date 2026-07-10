@@ -3,6 +3,7 @@ import type {
   SessionManager,
   SettingsManager,
   SlashCommandInfo,
+  SourceInfo,
 } from "@earendil-works/pi-coding-agent";
 
 export interface ContextUsage {
@@ -19,6 +20,9 @@ export interface ModelLike {
 export interface ToolInfo {
   name: string;
   description: string;
+  parameters?: unknown;
+  promptGuidelines?: unknown;
+  sourceInfo?: SourceInfo;
 }
 
 export interface NavigateTreeResult {
@@ -68,11 +72,15 @@ interface PromptTemplateLike {
 interface SkillLike {
   name: string;
   description?: string;
+  filePath: string;
   sourceInfo: SlashCommandInfo["sourceInfo"];
 }
 
 interface ResourceLoaderLike {
-  getSkills(): { skills: SkillLike[] };
+  getSkills(): {
+    skills: SkillLike[];
+    diagnostics?: Array<{ type: "warning" | "error" | "collision"; message: string; path?: string }>;
+  };
 }
 
 interface ExtensionRunnerLike {
