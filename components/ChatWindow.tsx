@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type AgentPhase, type NoticeItem, useAgentSession } from "@/hooks/useAgentSession";
+import { useProfiles } from "@/hooks/useProfiles";
+import { useSessionProfile } from "@/hooks/useSessionProfile";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -9,12 +11,15 @@ import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { SlashUiAction } from "@/lib/slash-command-registry";
+import type { ProfileRef } from "@/lib/profiles";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionUiHost, ExtensionUiInline } from "./ExtensionUiHost";
 import { MessageView } from "./MessageView";
 import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
+import { ProfileSelector } from "./ProfileSelector";
+import { ProfileManagerModal } from "./ProfileManagerModal";
 
 interface Props {
   appName?: string;
@@ -159,6 +164,22 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
 
   const [treeSelectorOpen, setTreeSelectorOpen] = useState(false);
   const [forkSelectorOpen, setForkSelectorOpen] = useState(false);
+  const [profileManagerOpen, setProfileManagerOpen] = useState(false);
+  const profilesState = useProfiles();
+  const reconcileProfileRuntimeRef = useRef<((sessionId: string) => Promise<void>) | null>(null);
+  const reconcileAfterProfileSwitch = useCallback(async (sessionId: string) => {
+    const reconcile = reconcileProfileRuntimeRef.current;
+    if (!reconcile) throw new Error("Profile runtime reconciliation is not ready.");
+    await reconcile(sessionId);
+  }, []);
+  const isNewSession = !session;
+  const sessionProfile = useSessionProfile({
+    sessionId: session?.id ?? null,
+    isNew: isNewSession,
+    profiles: profilesState.allProfiles,
+    globalDefaultProfileRef: profilesState.globalDefaultProfileRef,
+    onAfterSwitch: reconcileAfterProfileSwitch,
+  });
   const [fullTreeState, setFullTreeState] = useState<{
     sessionId: string | null;
     tree: SessionTreeNode[];
@@ -181,7 +202,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
   const {
     data, activeLeafId,
     loading, error, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, runtimeTools, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -195,11 +216,14 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand, handleOpenAIFastToggle,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, loadForkCandidates,
+    handleThinkingLevelChange, reconcileProfileRuntime, loadSlashCommands, loadForkCandidates,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen, onSlashUiAction: handleSlashUiAction,
+    newSessionProfileRef: sessionProfile.explicitNewSessionProfileRef,
+    onNewSessionProfileSnapshot: sessionProfile.acceptCreatedSnapshot,
   });
+  reconcileProfileRuntimeRef.current = reconcileProfileRuntime;
 
   // Push session stats up to AppShell for the top bar.
   // Compare scalar fields to avoid loops from new object identity each render.
@@ -264,6 +288,42 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
   const openAIFastEligible = openAIFastMode?.eligible;
   const showOpenAIFastToggle = !!openAIFastMode
     && (openAIFastMode.eligible || displayModelValue?.provider === "openai" || displayModelValue?.provider === "openai-codex");
+  const handleProfileSelect = useCallback(async (profileRef: string | null) => {
+    if (!profileRef) {
+      if (sessionProfile.materializedSessionId && profilesState.globalDefaultProfileRef) {
+        profileRef = profilesState.globalDefaultProfileRef;
+      } else {
+        sessionProfile.clearExplicitNewSessionProfile();
+        return;
+      }
+    }
+    if (agentRunning || isCompacting || sessionProfile.applying) return;
+    try {
+      await sessionProfile.applyProfile(profileRef as ProfileRef);
+    } catch {
+      // useSessionProfile keeps the previous confirmed state and exposes the error.
+    }
+  }, [agentRunning, isCompacting, profilesState.globalDefaultProfileRef, sessionProfile]);
+
+  const profileSelectorElement = (
+    <ProfileSelector
+      profiles={profilesState.allProfiles}
+      globalDefaultProfileRef={profilesState.globalDefaultProfileRef}
+      mode={isNew ? "new" : "existing"}
+      selectedProfileRef={sessionProfile.selectedProfileRef}
+      displayName={sessionProfile.displayName}
+      effectiveSnapshot={sessionProfile.effectiveSnapshot}
+      diagnostics={sessionProfile.diagnostics}
+      conflicts={sessionProfile.conflicts}
+      setupWarnings={profilesState.warnings}
+      runtimeTools={runtimeTools}
+      disabled={agentRunning || isCompacting || profilesState.loading || sessionProfile.loading}
+      applying={sessionProfile.applying}
+      error={sessionProfile.error ?? profilesState.error}
+      onSelectProfile={handleProfileSelect}
+      onOpenManager={() => setProfileManagerOpen(true)}
+    />
+  );
 
   useEffect(() => {
     if (!treeSelectorOpen) return;
@@ -345,8 +405,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
-      toolPreset={toolPreset}
-      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
+      profileSelector={profileSelectorElement}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
@@ -396,6 +455,13 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {profileManagerOpen && (
+        <ProfileManagerModal
+          cwd={session?.cwd ?? newSessionCwd}
+          profilesState={profilesState}
+          onClose={() => setProfileManagerOpen(false)}
+        />
+      )}
       {isDragOver && !agentRunning && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

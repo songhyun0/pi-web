@@ -27,6 +27,10 @@ function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
 }
 
+function isSettingsObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function toPluginScope(scope: string): PluginScope {
   return scope === "project" ? "project" : "global";
 }
@@ -58,6 +62,17 @@ function getDisabledPackages(settingsManager: SettingsManager): Map<string, bool
     disabled.set(keyFor(getPackageSource(entry), "project"), isDisabledPackage(entry));
   }
   return disabled;
+}
+
+function getConfiguredPackageSources(settingsManager: SettingsManager): Map<string, PackageSource> {
+  const configured = new Map<string, PackageSource>();
+  for (const entry of settingsManager.getGlobalSettings().packages ?? []) {
+    configured.set(keyFor(getPackageSource(entry), "global"), typeof entry === "string" ? entry : { ...entry });
+  }
+  for (const entry of settingsManager.getProjectSettings().packages ?? []) {
+    configured.set(keyFor(getPackageSource(entry), "project"), typeof entry === "string" ? entry : { ...entry });
+  }
+  return configured;
 }
 
 function setPackageDisabled(
@@ -207,10 +222,25 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   });
 
   const diagnostics: PluginDiagnostic[] = [];
+  const settingsErrors = settingsManager.drainErrors();
+  diagnostics.push(...settingsErrors.map((item) => ({
+    type: "error" as const,
+    message: `${item.scope}: ${item.error.message}`,
+  })));
+  if (!isSettingsObject(settingsManager.getGlobalSettings())) {
+    diagnostics.push({ type: "error", message: "Global settings.json must contain a JSON object." });
+  }
+  if (!isSettingsObject(settingsManager.getProjectSettings())) {
+    diagnostics.push({ type: "error", message: "Project .pi/settings.json must contain a JSON object." });
+  }
+  if (diagnostics.some((item) => item.type === "error")) {
+    return { packages: [], totals: emptyCounts(), diagnostics };
+  }
   let countsByPackage = new Map<string, PluginResourceCounts>();
   let resourcesByPackage = new Map<string, PluginResourceInfo[]>();
   let totals = emptyCounts();
   const disabledByPackage = getDisabledPackages(settingsManager);
+  const configuredSources = getConfiguredPackageSources(settingsManager);
 
   try {
     const resolved = await packageManager.resolve(async (source) => {
@@ -233,6 +263,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     const scope = toPluginScope(pkg.scope);
     const key = keyFor(pkg.source, scope);
     const disabled = disabledByPackage.get(key) ?? false;
+    const packageSource = configuredSources.get(key) ?? pkg.source;
     const counts = countsByPackage.get(key) ?? emptyCounts();
     const resources = resourcesByPackage.get(key) ?? [];
     const resourceCount = counts.extensions + counts.skills + counts.prompts + counts.themes;
@@ -246,6 +277,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     }
     return {
       source: pkg.source,
+      packageSource,
       scope,
       filtered: pkg.filtered,
       disabled,

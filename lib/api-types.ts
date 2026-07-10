@@ -1,3 +1,5 @@
+import type { PackageSource } from "./profiles";
+
 export interface SkillSearchResult {
   package: string;
   installs: string;
@@ -30,6 +32,7 @@ export interface PluginResourceInfo {
 
 export interface PluginPackageInfo {
   source: string;
+  packageSource: PackageSource;
   scope: PluginScope;
   filtered: boolean;
   disabled: boolean;

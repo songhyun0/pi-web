@@ -1,11 +1,18 @@
 // Client-side helper for POST /api/agent/[id].
-//
-// Every /api/agent/[id] route returns one of:
-//   { success: true, data: <result> }
-//   { error: string }              (non-2xx)
-//
-// Call sites previously repeated the same 5-line fetch block 13× in
-// hooks/useAgentSession.ts. This helper collapses that down to one line.
+
+import type { ProfileDiagnostic } from "./session-profile-store";
+
+export class AgentCommandError extends Error {
+  status: number;
+  diagnostics: ProfileDiagnostic[];
+
+  constructor(message: string, status: number, diagnostics: ProfileDiagnostic[] = []) {
+    super(message);
+    this.name = "AgentCommandError";
+    this.status = status;
+    this.diagnostics = diagnostics;
+  }
+}
 
 export async function sendAgentCommand<T = unknown>(
   sessionId: string,
@@ -20,9 +27,10 @@ export async function sendAgentCommand<T = unknown>(
     success?: boolean;
     data?: T;
     error?: string;
+    diagnostics?: ProfileDiagnostic[];
   };
   if (!res.ok || body.error) {
-    throw new Error(body.error ?? `HTTP ${res.status}`);
+    throw new AgentCommandError(body.error ?? `HTTP ${res.status}`, res.status, body.diagnostics ?? []);
   }
   return body.data as T;
 }

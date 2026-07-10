@@ -16,7 +16,9 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { parseUserBashCommand } from "@/lib/user-bash";
-import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
+import type { RuntimeToolMetadata } from "@/lib/profile-runtime";
+import type { ProfileRef } from "@/lib/profiles";
+import type { CapabilitySnapshotV1, ProfileDiagnostic } from "@/lib/session-profile-store";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
   getWebBuiltinSlashCommand,
@@ -246,7 +248,8 @@ export interface UseAgentSessionOptions {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsPanelOpen?: () => void;
   onSlashUiAction?: (action: SlashUiAction) => void | Promise<void>;
-  setToolPreset?: (preset: "none" | "default" | "full") => void;
+  newSessionProfileRef?: ProfileRef | null;
+  onNewSessionProfileSnapshot?: (snapshot: CapabilitySnapshotV1, sessionId: string) => void;
 }
 
 export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -263,11 +266,8 @@ const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space", "Spacebar"]);
-const TOOL_PRESET_STORAGE_KEY = "pi-web-default-tool-preset";
 const THINKING_LEVEL_STORAGE_KEY = "pi-web-default-thinking-level";
-const FALLBACK_TOOL_PRESET: "none" | "default" | "full" = "full";
 const FALLBACK_THINKING_LEVEL: ThinkingLevelOption = "xhigh";
-const TOOL_PRESET_VALUES = new Set(["none", "default", "full"]);
 const THINKING_LEVEL_VALUES = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh"]);
 
 function readLocalStorageValue(key: string): string | null {
@@ -288,10 +288,6 @@ function writeLocalStorageValue(key: string, value: string): void {
   }
 }
 
-function readStoredToolPreset(): "none" | "default" | "full" {
-  const value = readLocalStorageValue(TOOL_PRESET_STORAGE_KEY);
-  return TOOL_PRESET_VALUES.has(value ?? "") ? value as "none" | "default" | "full" : FALLBACK_TOOL_PRESET;
-}
 
 function readStoredThinkingLevel(): ThinkingLevelOption {
   const value = readLocalStorageValue(THINKING_LEVEL_STORAGE_KEY);
@@ -323,6 +319,12 @@ function createNoticeId(): string {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function describeClientError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const diagnostics = (error as { diagnostics?: ProfileDiagnostic[] } | null)?.diagnostics ?? [];
+  return diagnostics.length > 0 ? `${message} ${diagnostics.map((item) => item.message).join(" ")}` : message;
 }
 
 function delay(ms: number): Promise<void> {
@@ -533,6 +535,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen, onSlashUiAction,
+    newSessionProfileRef, onNewSessionProfileSnapshot,
   } = opts;
 
   const isNew = session === null && newSessionCwd !== null;
@@ -551,7 +554,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
-  const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(() => readStoredToolPreset());
+  const [runtimeTools, setRuntimeTools] = useState<RuntimeToolMetadata[]>([]);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(() => readStoredThinkingLevel());
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null);
@@ -581,6 +584,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
+  const runtimeEpochRef = useRef(0);
   const agentRunningRef = useRef(false);
   const userBashRunningRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
@@ -596,11 +600,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const optimisticUserMessageTimestampRef = useRef<number | null>(null);
   const liveContextUsageRefreshInFlightRef = useRef(false);
   const lastLiveContextUsageRefreshAtRef = useRef(0);
   const pendingLiveContextUsageRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
@@ -669,7 +673,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   })();
 
-  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
+  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, throwOnError = false) => {
+    const requestEpoch = runtimeEpochRef.current;
     try {
       if (showLoading) setLoading(true);
       const url = includeState
@@ -677,6 +682,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : `/api/sessions/${encodeURIComponent(sid)}`;
       const res = await fetch(url);
       if (res.status === 404) {
+        if (requestEpoch !== runtimeEpochRef.current) return null;
+        if (throwOnError) throw new Error("Session not found");
         if (showLoading) {
           setData(null);
           setActiveLeafId(null);
@@ -687,6 +694,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json() as SessionData & { agentState?: { running: boolean; state?: AgentStateResponse } };
+      if (requestEpoch !== runtimeEpochRef.current) return null;
       setData(d);
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
@@ -709,10 +717,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return d.agentState ?? null;
     } catch (e) {
+      if (requestEpoch !== runtimeEpochRef.current) return null;
       setError(String(e));
+      if (throwOnError) throw e;
       return null;
     } finally {
-      if (showLoading) setLoading(false);
+      if (showLoading && requestEpoch === runtimeEpochRef.current) setLoading(false);
     }
   }, [applyContextUsageFromState, applyExtensionUiFromState, applyOpenAIFastFromState]);
 
@@ -732,16 +742,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const loadTools = useCallback(async (sid: string) => {
+    const requestEpoch = runtimeEpochRef.current;
     try {
-      const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
-      if (tools) {
-        const { getPresetFromTools } = await import("@/lib/tool-presets");
-        setToolPresetState(getPresetFromTools(tools));
-      }
+      const tools = await sendAgentCommand<RuntimeToolMetadata[]>(sid, { type: "get_tools" });
+      if (requestEpoch !== runtimeEpochRef.current) return;
+      setRuntimeTools(tools ?? []);
     } catch (e) {
+      if (requestEpoch !== runtimeEpochRef.current) return;
       console.error("Failed to load tools:", e);
+      setRuntimeTools([]);
+      dispatchNotice({
+        type: "add",
+        notice: {
+          id: createNoticeId(),
+          message: `Failed to refresh runtime tools: ${describeClientError(e)}`,
+          type: "error",
+        },
+      });
+      throw e;
     }
-  }, [setToolPresetState]);
+  }, []);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
@@ -767,23 +787,37 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const promise = (async () => {
       const selectedModel = newSessionModel ?? newSessionDefaultModel;
       if (selectedModel) setPendingModel(selectedModel);
-      const toolNames = getToolNamesForPreset(toolPreset);
       const res = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cwd: newSessionCwd,
           type: "ensure_session",
-          toolNames,
+          ...(newSessionProfileRef ? { profileRef: newSessionProfileRef } : {}),
           ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
           ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result = await res.json() as { sessionId: string };
-      const realId = result.sessionId;
-      sessionIdRef.current = realId;
-      return realId;
+      const result = await res.json().catch(() => ({})) as {
+        sessionId?: string;
+        profileSnapshot?: CapabilitySnapshotV1;
+        diagnostics?: ProfileDiagnostic[];
+        error?: string;
+        exposed?: boolean;
+      };
+      if (result.sessionId) {
+        sessionIdRef.current = result.sessionId;
+        if (result.profileSnapshot) onNewSessionProfileSnapshot?.(result.profileSnapshot, result.sessionId);
+      }
+      if (!res.ok) {
+        const error = new Error(result.error ?? `HTTP ${res.status}`) as Error & { diagnostics?: ProfileDiagnostic[]; sessionId?: string };
+        error.diagnostics = result.diagnostics;
+        error.sessionId = result.sessionId;
+        throw error;
+      }
+      if (!result.sessionId) throw new Error("New-session response did not include a session id.");
+      void loadTools(result.sessionId).catch(() => undefined);
+      return result.sessionId;
     })();
 
     ensuringNewSessionRef.current = promise;
@@ -792,10 +826,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
-
+  }, [isNew, loadTools, newSessionCwd, newSessionModel, newSessionDefaultModel, newSessionProfileRef, onNewSessionProfileSnapshot, thinkingLevel]);
   const loadSlashCommands = useCallback(async () => {
-    const sid = sessionIdRef.current ?? await ensureNewSession();
+    const requestEpoch = runtimeEpochRef.current;
+    const sid = sessionIdRef.current ?? (isNew ? null : await ensureNewSession());
     if (!sid) {
       setSlashCommands([]);
       return [] as SlashCommandInfo[];
@@ -803,17 +837,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setSlashCommandsLoading(true);
     try {
       const data = await sendAgentCommand<SlashCommandsResponse>(sid, { type: "get_commands" });
+      if (requestEpoch !== runtimeEpochRef.current) return [] as SlashCommandInfo[];
       const commands = data?.commands ?? [];
       setSlashCommands(commands);
       return commands;
     } catch (e) {
+      if (requestEpoch !== runtimeEpochRef.current) return [] as SlashCommandInfo[];
       console.error("Failed to load slash commands:", e);
       setSlashCommands([]);
       return [] as SlashCommandInfo[];
     } finally {
-      setSlashCommandsLoading(false);
+      if (requestEpoch === runtimeEpochRef.current) setSlashCommandsLoading(false);
     }
-  }, [ensureNewSession]);
+  }, [ensureNewSession, isNew]);
 
   const loadForkCandidates = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -841,6 +877,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const timeout = setTimeout(() => settle("timeout"), EVENT_STREAM_CONNECT_TIMEOUT_MS);
 
       es.onmessage = (e) => {
+        if (eventSourceRef.current !== es) return;
         try {
           const event = JSON.parse(e.data) as AgentEvent;
           if (event.type === "connected") settle("connected");
@@ -876,6 +913,34 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     result.source.close();
     throw new EventStreamConnectionError(result.status);
   }, [connectEvents]);
+
+  const reconcileProfileRuntime = useCallback(async (sid: string) => {
+    runtimeEpochRef.current += 1;
+    sessionIdRef.current = sid;
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setRuntimeTools([]);
+    setSlashCommands([]);
+    setSlashCommandsLoading(false);
+    setExtensionDialog(null);
+    setExtensionCustomUi(null);
+    setExtensionStatuses([]);
+    setExtensionWidgets([]);
+    setExtensionChrome({ headerLines: [], footerLines: [], working: { visible: false } });
+    setExtensionCompatibility([]);
+    setExtensionAutocompleteProviders([]);
+    try {
+      await loadSession(sid, false, true, true);
+      await ensureEventsConnected(sid);
+      await loadTools(sid);
+      await loadSlashCommands();
+    } catch (error) {
+      const message = `Failed to reconcile the switched profile runtime: ${describeClientError(error)}`;
+      setError(message);
+      dispatchNotice({ type: "add", notice: { id: createNoticeId(), message, type: "error" } });
+      throw error;
+    }
+  }, [ensureEventsConnected, loadSession, loadSlashCommands, loadTools]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -1035,6 +1100,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       optimisticUserMessageKeyRef.current = null;
+      optimisticUserMessageTimestampRef.current = null;
       if (!agentRunningRef.current) return;
       agentRunningRef.current = false;
       setAgentRunning(false);
@@ -1281,6 +1347,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const deliveredKey = userMessageKey(delivered);
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
+          optimisticUserMessageTimestampRef.current = null;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
@@ -1448,6 +1515,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
     setMessages((prev) => [...prev, userMsg]);
     optimisticUserMessageKeyRef.current = userMessageKey(userMsg);
+    optimisticUserMessageTimestampRef.current = userMsg.timestamp as number;
     promptRunIdRef.current = promptRunId;
     agentRunningRef.current = true;
     setAgentRunning(true);
@@ -1495,19 +1563,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to send message:", e);
-      if (e instanceof EventStreamConnectionError) {
-        const optimisticKey = optimisticUserMessageKeyRef.current;
-        if (optimisticKey) {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            return last?.role === "user" && userMessageKey(last) === optimisticKey
-              ? prev.slice(0, -1)
-              : prev;
-          });
-        }
-        addNotice({ type: "error", message: e.message });
+      const optimisticTimestamp = optimisticUserMessageTimestampRef.current;
+      if (optimisticTimestamp !== null) {
+        setMessages((prev) => prev.filter((candidate) => !(
+          candidate.role === "user" && candidate.timestamp === optimisticTimestamp
+        )));
       }
+      addNotice({ type: "error", message: describeClientError(e) });
       optimisticUserMessageKeyRef.current = null;
+      optimisticUserMessageTimestampRef.current = null;
       agentRunningRef.current = false;
       setAgentRunning(false);
       setAgentPhase(null);
@@ -1943,19 +2007,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  const handleToolPresetChange = useCallback(async (preset: "none" | "default" | "full") => {
-    const toolNames = getToolNamesForPreset(preset);
-    setToolPresetState(preset);
-    writeLocalStorageValue(TOOL_PRESET_STORAGE_KEY, preset);
-    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-    if (!sid) return;
-    try {
-      await sendAgentCommand(sid, { type: "set_tools", toolNames });
-    } catch (e) {
-      console.error("Failed to set tools:", e);
-    }
-  }, [setToolPresetState]);
-
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     ignoreProgrammaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_IGNORE_MS;
     messagesEndRef.current?.scrollIntoView({ behavior });
@@ -1991,7 +2042,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
         if (agentState?.running) {
-          loadTools(session.id);
+          void loadTools(session.id).catch(() => undefined);
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
             agentRunningRef.current = true;
             setAgentRunning(true);
@@ -2117,7 +2168,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
-    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
+    agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, runtimeTools, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, openAIFastMode, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -2133,7 +2184,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand, handleOpenAIFastToggle,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
+    handleThinkingLevelChange, loadTools, reconcileProfileRuntime, loadSlashCommands, loadForkCandidates, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,
