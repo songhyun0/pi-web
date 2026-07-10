@@ -90,7 +90,7 @@ export function profileDisplayName(options: {
 export function reconcileHiddenSkillRefsForPlugins(hiddenSkillRefs: SkillRef[] | undefined, selectedPluginSources: string[]): SkillRef[] {
   if (!hiddenSkillRefs?.length) return [];
   const selected = new Set(selectedPluginSources);
-  return hiddenSkillRefs.filter((ref) => selected.has(ref.source));
+  return hiddenSkillRefs.filter((ref) => ref.scope !== "package" || selected.has(ref.source));
 }
 
 function packageSource(plugin: PackageSource): string {

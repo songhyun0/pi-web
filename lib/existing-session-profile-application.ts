@@ -75,7 +75,7 @@ export interface ExistingSessionProfileSwitchDependencies {
     sessionFile: string,
     cwd: string,
     toolNames?: string[],
-    runtimeOptions?: { agentDir?: string; profileSnapshot?: CapabilitySnapshotV1; isolateSessionFile?: boolean },
+    runtimeOptions?: { agentDir?: string; profileSnapshot?: CapabilitySnapshotV1; isolateSessionFile?: boolean; resolveProfileTools?: boolean },
   ) => Promise<{ session: NewSessionRuntime; realSessionId: string }>;
   replaceRpcSession?: (sessionId: string, session: NewSessionRuntime) => AgentSessionWrapper | NewSessionRuntime | undefined;
   unregisterRpcSession?: (sessionId: string, session?: NewSessionRuntime) => void;
@@ -219,7 +219,7 @@ export async function switchExistingSessionProfileApiResult(
     if (hasRunningRuntime(sessionId, dependencies)) return runningConflict();
 
     const cwd = dependencies.readSessionCwd(sessionFilePath);
-    const snapshot = await buildSwitchSnapshot({ cwd, profileRef, dependencies, profileStoreOptions, agentDir });
+    let snapshot = await buildSwitchSnapshot({ cwd, profileRef, dependencies, profileStoreOptions, agentDir });
 
     let candidate: { session: NewSessionRuntime; realSessionId: string } | undefined;
     let writeResult: { record: SessionProfileRecordV1; previousRecord: SessionProfileRecordV1 | null; writeToken: SessionSnapshotWriteToken } | undefined;
@@ -230,12 +230,14 @@ export async function switchExistingSessionProfileApiResult(
         agentDir,
         profileSnapshot: snapshot,
         isolateSessionFile: true,
+        resolveProfileTools: true,
       });
       if (candidate.realSessionId !== sessionId) {
         throw new NewSessionProfileError(`Candidate runtime session id ${candidate.realSessionId} did not match requested session ${sessionId}.`, 500);
       }
 
-      await candidate.session.bindExtensions({ forceEmptySystemPrompt: snapshot.tools.activeToolNames.length === 0 });
+      await candidate.session.bindExtensions({ forceEmptySystemPrompt: false });
+      snapshot = candidate.session.finalizeProfileToolPolicy?.() ?? candidate.session.capabilitySnapshot ?? snapshot;
       const metadata = applyProfileToolPolicy(candidate.session.inner, snapshot);
       const validation = validateProfileRuntimeAgainstSnapshot(candidate.session.inner, snapshot, metadata);
       if (validation.diagnostics.length > 0) {

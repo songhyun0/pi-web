@@ -31,7 +31,9 @@ export interface NewSessionRuntime {
   sessionId: string;
   sessionFile: string;
   inner: ProfileToolPolicySession;
+  readonly capabilitySnapshot?: CapabilitySnapshotV1;
   bindExtensions(options?: { forceEmptySystemPrompt?: boolean }): Promise<void>;
+  finalizeProfileToolPolicy?(): CapabilitySnapshotV1 | undefined;
   stageSessionFileForPublication?(): string;
   promoteIsolatedSessionFile?(): void;
   send(command: Record<string, unknown>): Promise<unknown>;
@@ -55,9 +57,8 @@ export interface CreateProfileBackedNewSessionResult {
 type CreateUnregisteredSession = (
   cwd: string,
   toolNames?: string[],
-  runtimeOptions?: { agentDir?: string; profileSnapshot?: CapabilitySnapshotV1 },
+  runtimeOptions?: { agentDir?: string; profileSnapshot?: CapabilitySnapshotV1; resolveProfileTools?: boolean },
 ) => Promise<{ session: NewSessionRuntime; realSessionId: string }>;
-
 export interface NewSessionProfileDependencies {
   profileStoreOptions?: ProfileStoreOptions;
   sessionProfileStoreOptions?: SessionProfileStoreOptions;
@@ -159,7 +160,7 @@ export function buildCapabilitySnapshotFromPreview(options: {
   createdAt?: string;
 }): CapabilitySnapshotV1 {
   const diagnostics = [...(options.diagnostics ?? []), ...options.preview.diagnostics];
-  if (!options.preview.safeToApply || !options.preview.tools.activeToolNames || options.preview.tools.unknownToolMetadata) {
+  if (!options.preview.safeToApply || !options.preview.tools.activeToolNames) {
     const safetyDiagnostics: ProfileDiagnostic[] = diagnostics.some((diagnostic) => diagnostic.type === "error")
       ? diagnostics
       : [{
@@ -220,7 +221,7 @@ export async function createProfileBackedNewSessionRuntime(
     { cwd: input.cwd, profileRef: resolved.profileRef },
     { agentDir: input.agentDir, profileStoreOptions },
   );
-  const snapshot = buildCapabilitySnapshotFromPreview({
+  let snapshot = buildCapabilitySnapshotFromPreview({
     preview,
     profileRef: resolved.profileRef,
     cwd: preview.cwd,
@@ -241,11 +242,13 @@ export async function createProfileBackedNewSessionRuntime(
     runtime = await dependencies.createUnregisteredRpcSession(preview.cwd, undefined, {
       agentDir: input.agentDir,
       profileSnapshot: snapshot,
+      resolveProfileTools: true,
     });
     const publishedSessionFile = runtime.session.stageSessionFileForPublication?.() ?? runtime.session.sessionFile;
     await dependencies.ensureSessionFileMaterialized(runtime.session, runtime.realSessionId, preview.cwd);
 
-    await runtime.session.bindExtensions({ forceEmptySystemPrompt: snapshot.tools.activeToolNames.length === 0 });
+    await runtime.session.bindExtensions({ forceEmptySystemPrompt: !preview.tools.unknownToolMetadata && snapshot.tools.activeToolNames.length === 0 });
+    snapshot = runtime.session.finalizeProfileToolPolicy?.() ?? runtime.session.capabilitySnapshot ?? snapshot;
     const runtimeMetadata = applyProfileToolPolicy(runtime.session.inner, snapshot);
     const runtimeValidation = validateProfileRuntimeAgainstSnapshot(runtime.session.inner, snapshot, runtimeMetadata);
     if (runtimeValidation.diagnostics.length > 0) {

@@ -18,6 +18,7 @@ import {
   type SkillRef,
 } from "./profiles";
 import { resolveProfilesFile, type ProfileStoreOptions } from "./profile-store";
+import { getProjectTrustStatus } from "./project-trust-core";
 import type { ProfileDiagnostic, ToolConflict } from "./session-profile-store";
 
 export interface PluginToolPreview {
@@ -76,16 +77,9 @@ type NormalizedProfilePackage = Exclude<PackageSource, string>;
 const STATIC_REGISTER_TOOL_RE = /(?:\b\w+\s*\.\s*)?registerTool\s*\(\s*\{[\s\S]*?\bname\s*:\s*["'`]([A-Za-z0-9_.-]+)["'`]/g;
 const REGISTER_TOOL_CALL_RE = /(?:\b\w+\s*\.\s*)?registerTool\s*\(/g;
 const BRACKET_REGISTER_TOOL_RE = /\[["'`]registerTool["'`]\]\s*\(/g;
-const HELPER_WITH_PI_CALL_RE = /\b(?!registerTool\b)[A-Za-z_$][\w$]*\s*\(\s*pi\b/g;
-
-function hasHelperWithPiCall(content: string): boolean {
-  for (const match of content.matchAll(HELPER_WITH_PI_CALL_RE)) {
-    const before = content.slice(Math.max(0, (match.index ?? 0) - 16), match.index ?? 0);
-    if (/function\s*$/.test(before)) continue;
-    return true;
-  }
-  return false;
-}
+const TOOL_HELPER_WITH_PI_CALL_RE = /\b(?:reg(?:ister)?|setup|initialize|init|create)[A-Za-z_$][\w$]*\s*\(\s*pi\b/g;
+const DYNAMIC_RESOURCE_DISCOVERY_RE = /\.on\s*\(\s*["'`]resources_discover["'`]/;
+export const INCOMPLETE_TOOL_METADATA_MESSAGE = "Enabled extension tool metadata will be resolved from the isolated session runtime.";
 
 function previewErrorFromUnknown(error: unknown): never {
   if (error instanceof ProfilePreviewError) throw error;
@@ -179,6 +173,33 @@ async function resolveSelectedPackageResources(cwd: string, agentDir: string, pl
   return { resolved, missingSources, diagnostics };
 }
 
+async function resolveStandaloneSkillResources(cwd: string, agentDir: string): Promise<{ skills: ResolvedResource[]; diagnostics: ProfileDiagnostic[] }> {
+  const projectTrusted = getProjectTrustStatus(cwd, agentDir).effective.trusted;
+  const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+  const diagnostics: ProfileDiagnostic[] = settingsManager.drainErrors().map((item) => diagnostic(
+    "error",
+    `${item.scope}: ${item.error.message}`,
+  ));
+  const globalSettings = settingsManager.getGlobalSettings() as unknown;
+  const projectSettings = settingsManager.getProjectSettings() as unknown;
+  if (!isRecord(globalSettings)) diagnostics.push(diagnostic("error", "Global settings.json must contain a JSON object."));
+  if (projectTrusted && !isRecord(projectSettings)) diagnostics.push(diagnostic("error", "Project .pi/settings.json must contain a JSON object."));
+  if (diagnostics.some((item) => item.type === "error")) return { skills: [], diagnostics };
+  try {
+    const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+    const resolved = await packageManager.resolve(async () => "skip");
+    return {
+      skills: resolved.skills.filter((resource) => resource.metadata.origin === "top-level"),
+      diagnostics,
+    };
+  } catch (error) {
+    return {
+      skills: [],
+      diagnostics: [...diagnostics, diagnostic("error", `Unable to resolve standalone skills: ${error instanceof Error ? error.message : String(error)}`)],
+    };
+  }
+}
+
 function selectedPackageSources(plugins: NormalizedProfilePackage[]): Set<string> {
   return new Set(plugins.map((plugin) => packageSourceString(plugin)));
 }
@@ -218,7 +239,7 @@ function relativeResourcePath(resource: ResolvedResource): string {
   return path.relative(baseDir, resource.path).split(path.sep).join("/");
 }
 
-async function readExtensionToolMetadata(extension: ResolvedResource): Promise<{ tools: PluginToolPreview[]; unknown: boolean; diagnostic?: ProfileDiagnostic }> {
+async function readExtensionToolMetadata(extension: ResolvedResource): Promise<{ tools: PluginToolPreview[]; unknown: boolean; unsafe: boolean; diagnostic?: ProfileDiagnostic }> {
   const relativePath = relativeResourcePath(extension);
   let content: string;
   try {
@@ -227,6 +248,7 @@ async function readExtensionToolMetadata(extension: ResolvedResource): Promise<{
     return {
       tools: [],
       unknown: true,
+      unsafe: true,
       diagnostic: diagnostic("error", `Unable to read enabled extension for tool metadata: ${error instanceof Error ? error.message : String(error)}`, extension.metadata.source, relativePath),
     };
   }
@@ -243,12 +265,21 @@ async function readExtensionToolMetadata(extension: ResolvedResource): Promise<{
     });
   }
 
+  if (DYNAMIC_RESOURCE_DISCOVERY_RE.test(content)) {
+    return {
+      tools,
+      unknown: true,
+      unsafe: true,
+      diagnostic: diagnostic("error", "Enabled extension resources cannot be resolved without executing extension code.", extension.metadata.source, relativePath),
+    };
+  }
   const callCount = [...content.matchAll(REGISTER_TOOL_CALL_RE)].length + [...content.matchAll(BRACKET_REGISTER_TOOL_RE)].length;
-  const unknown = callCount === 0 || callCount !== staticMatches.length || hasHelperWithPiCall(content);
+  const unknown = callCount !== staticMatches.length || TOOL_HELPER_WITH_PI_CALL_RE.test(content);
   return {
     tools,
     unknown,
-    ...(unknown ? { diagnostic: diagnostic("error", "Enabled extension tool metadata could not be exhaustively resolved without executing a live runtime.", extension.metadata.source, relativePath) } : {}),
+    unsafe: false,
+    ...(unknown ? { diagnostic: diagnostic("warning", INCOMPLETE_TOOL_METADATA_MESSAGE, extension.metadata.source, relativePath) } : {}),
   };
 }
 
@@ -257,14 +288,14 @@ async function buildToolPreview(profile: ProfileDefinition, extensions: Resolved
   const diagnostics: ProfileDiagnostic[] = [];
   const pluginTools: PluginToolPreview[] = [];
   let unknownToolMetadata = false;
+  let unsafeToolMetadata = false;
 
   for (const extension of extensions.filter((resource) => resource.enabled && resource.metadata.origin === "package")) {
     const metadata = await readExtensionToolMetadata(extension);
     pluginTools.push(...metadata.tools);
-    if (metadata.unknown) {
-      unknownToolMetadata = true;
-      if (metadata.diagnostic) diagnostics.push(metadata.diagnostic);
-    }
+    if (metadata.unknown) unknownToolMetadata = true;
+    if (metadata.unsafe) unsafeToolMetadata = true;
+    if (metadata.diagnostic) diagnostics.push(metadata.diagnostic);
   }
 
   const pluginToolCounts = new Map<string, number>();
@@ -273,7 +304,7 @@ async function buildToolPreview(profile: ProfileDefinition, extensions: Resolved
   for (const name of ambiguousPluginToolNames) {
     diagnostics.push(diagnostic("error", `Multiple selected plugin extensions register tool '${name}'; provider selection is ambiguous.`, name));
   }
-  const unsafeToolMetadata = unknownToolMetadata || ambiguousPluginToolNames.length > 0;
+  unsafeToolMetadata ||= ambiguousPluginToolNames.length > 0;
 
   const builtinSet = new Set(requestedBuiltinTools);
   const conflicts: ToolConflict[] = [];
@@ -293,8 +324,8 @@ async function buildToolPreview(profile: ProfileDefinition, extensions: Resolved
     requestedBuiltinTools,
     pluginTools,
     conflicts,
-    unknownToolMetadata: unsafeToolMetadata,
-    ...(unsafeToolMetadata ? {} : { activeToolNames: uniqueStrings([...requestedBuiltinTools, ...pluginTools.map((tool) => tool.name)]) }),
+    unknownToolMetadata,
+    activeToolNames: uniqueStrings([...requestedBuiltinTools, ...pluginTools.map((tool) => tool.name)]),
   };
   return { tools, diagnostics, safe: !unsafeToolMetadata };
 }
@@ -306,6 +337,15 @@ function skillNameFromPath(skillPath: string): string {
 }
 
 function skillRefForResource(resource: ResolvedResource): SkillRef {
+  if (resource.metadata.origin !== "package") {
+    const absolutePath = path.resolve(resource.path);
+    return {
+      source: absolutePath,
+      scope: resource.metadata.scope,
+      path: absolutePath,
+      name: skillNameFromPath(absolutePath),
+    };
+  }
   const skillPath = relativeResourcePath(resource);
   return {
     source: resource.metadata.source,
@@ -320,7 +360,7 @@ function buildSkillPreview(profile: ProfileDefinition, skills: ResolvedResource[
   const visibleSkillRefs: SkillRef[] = [];
   const hiddenSkillRefs: SkillRef[] = [];
 
-  for (const skill of skills.filter((resource) => resource.metadata.origin === "package")) {
+  for (const skill of skills) {
     const ref = skillRefForResource(skill);
     if (skill.enabled) visibleSkillRefs.push(ref);
     else hiddenSkillRefs.push(ref);
@@ -336,7 +376,7 @@ function buildSkillPreview(profile: ProfileDefinition, skills: ResolvedResource[
       }
     }
     if (visibleSkillRefs.length !== before) {
-      diagnostics.push(diagnostic("warning", "A disabled skill ref matched an enabled package skill; hidden wins for this preview.", disabled.source, disabled.path));
+      diagnostics.push(diagnostic("warning", "A disabled skill ref matched an enabled skill; hidden wins for this preview.", disabled.source, disabled.path));
     }
   }
 
@@ -364,7 +404,8 @@ export async function resolveProfilePreview(request: ProfilePreviewRequest, opti
 
   const missing = buildMissingPackageDiagnostics(plugins, resolved, missingSources);
   const toolPreview = await buildToolPreview(profile, selectedExtensions);
-  const skillPreview = buildSkillPreview(profile, selectedSkills);
+  const standalone = await resolveStandaloneSkillResources(cwd, agentDir);
+  const skillPreview = buildSkillPreview(profile, [...selectedSkills, ...standalone.skills]);
   const tools = missing.unknownToolMetadata
     ? { ...toolPreview.tools, unknownToolMetadata: true, activeToolNames: undefined }
     : toolPreview.tools;
@@ -372,11 +413,14 @@ export async function resolveProfilePreview(request: ProfilePreviewRequest, opti
   const diagnostics = [
     ...profileDiagnostics,
     ...resolveDiagnostics,
+    ...standalone.diagnostics,
     ...missing.diagnostics,
     ...toolPreview.diagnostics,
     ...skillPreview.diagnostics,
   ];
-  const safeToApply = missing.safe && toolPreview.safe && !resolveDiagnostics.some((item) => item.type === "error");
+  const safeToApply = missing.safe && toolPreview.safe
+    && !resolveDiagnostics.some((item) => item.type === "error")
+    && !standalone.diagnostics.some((item) => item.type === "error");
 
   return {
     ...(profileRef ? { profileRef } : {}),

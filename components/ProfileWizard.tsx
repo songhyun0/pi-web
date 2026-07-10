@@ -158,6 +158,30 @@ export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySk
             <label key={`${skill.source}:${skill.path}`} style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input type="checkbox" checked={checked} onChange={(event) => {
                 if (!preview) return;
+                if (skill.scope !== "package") {
+                  const standaloneVisible = event.target.checked;
+                  const nextHidden = standaloneVisible
+                    ? draft.hiddenSkillRefs.filter((ref) => !(ref.source === skill.source && ref.path === skill.path))
+                    : [...draft.hiddenSkillRefs.filter((ref) => !(ref.source === skill.source && ref.path === skill.path)), skill];
+                  dispatch({ type: "hiddenSkillRefs", value: nextHidden });
+                  setPreview((current) => {
+                    if (!current) return current;
+                    const key = `${skill.source}\0${skill.path}`;
+                    const visible = new Set(current.skills.visibleSkillRefs.map((ref) => `${ref.source}\0${ref.path}`));
+                    if (standaloneVisible) visible.add(key);
+                    else visible.delete(key);
+                    const allRefs = previewSkillRefs;
+                    return {
+                      ...current,
+                      skills: {
+                        ...current.skills,
+                        visibleSkillRefs: allRefs.filter((ref) => visible.has(`${ref.source}\0${ref.path}`)),
+                        hiddenSkillRefs: allRefs.filter((ref) => !visible.has(`${ref.source}\0${ref.path}`)),
+                      },
+                    };
+                  });
+                  return;
+                }
                 const update = updatePackageSkillVisibility(
                   draft.plugins,
                   previewSkillRefs,
@@ -191,8 +215,8 @@ export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySk
               <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{skill.source}</span>
             </label>
           );
-        }) : <div style={{ color: "var(--text-muted)" }}>No visible package skills were returned by the server preview.</div>}
-        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>Skill toggles update authoritative PackageSource.skills filters. Hidden skill refs remain fallback cleanup only.</div>
+        }) : <div style={{ color: "var(--text-muted)" }}>No skills were returned by the server preview.</div>}
+        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>Package skill toggles update authoritative PackageSource filters; standalone skill toggles use exact hidden refs.</div>
       </div>}
 
       {step === 4 && <div style={{ display: "grid", gap: 8 }}>

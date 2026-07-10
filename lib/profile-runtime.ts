@@ -121,23 +121,29 @@ function suppressedResourcePatterns(): string[] {
   return [...SUPPRESS_AUTO_AND_TOP_LEVEL_RESOURCES];
 }
 
-function withGlobalProfileResources(settings: PiSettings, packages: PackageSource[]): PiSettings {
+function standaloneSkillPatterns(snapshot: CapabilitySnapshotV1, scope: "global" | "project"): string[] {
+  const refs = snapshot.skills.visibleSkillRefs.filter((ref) => ref.scope !== "package"
+    && (scope === "project" ? ref.scope === "project" : ref.scope !== "project"));
+  return ["!**", ...refs.map((ref) => `+${ref.path}`)];
+}
+
+function withGlobalProfileResources(settings: PiSettings, packages: PackageSource[], skillPatterns: string[]): PiSettings {
   return {
     ...withoutResourceSettings(settings),
     packages: cloneJson(packages),
     extensions: suppressedResourcePatterns(),
-    skills: suppressedResourcePatterns(),
+    skills: [...skillPatterns],
     prompts: suppressedResourcePatterns(),
     themes: suppressedResourcePatterns(),
   };
 }
 
-function withSuppressedProjectResources(settings: PiSettings): PiSettings {
+function withSuppressedProjectResources(settings: PiSettings, skillPatterns: string[]): PiSettings {
   return {
     ...withoutResourceSettings(settings),
     packages: [],
     extensions: suppressedResourcePatterns(),
-    skills: suppressedResourcePatterns(),
+    skills: [...skillPatterns],
     prompts: suppressedResourcePatterns(),
     themes: suppressedResourcePatterns(),
   };
@@ -159,17 +165,20 @@ export function createProfileScopedSettingsManager(options: CreateProfileScopedS
   assertValidProfileSettings(base, projectTrusted);
   const manager = base as MutableSettingsManager;
   const profilePackages = normalizeProfilePackages(options.snapshot.plugins);
+  const globalSkillPatterns = standaloneSkillPatterns(options.snapshot, "global");
+  const projectSkillPatterns = standaloneSkillPatterns(options.snapshot, "project");
+  const combinedSkillPatterns = ["!**", ...globalSkillPatterns.slice(1), ...projectSkillPatterns.slice(1)];
 
   const baseGetGlobalSettings = manager.getGlobalSettings.bind(manager);
   const baseGetProjectSettings = manager.getProjectSettings.bind(manager);
   const baseReload = manager.reload.bind(manager);
   const baseApplyOverrides = manager.applyOverrides.bind(manager);
 
-  manager.getGlobalSettings = () => withGlobalProfileResources(baseGetGlobalSettings(), profilePackages);
-  manager.getProjectSettings = () => withSuppressedProjectResources(baseGetProjectSettings());
+  manager.getGlobalSettings = () => withGlobalProfileResources(baseGetGlobalSettings(), profilePackages, globalSkillPatterns);
+  manager.getProjectSettings = () => withSuppressedProjectResources(baseGetProjectSettings(), projectSkillPatterns);
   manager.getPackages = () => cloneJson(profilePackages);
   manager.getExtensionPaths = () => [...EMPTY_RESOURCE_PATHS];
-  manager.getSkillPaths = () => [...EMPTY_RESOURCE_PATHS];
+  manager.getSkillPaths = () => [...combinedSkillPatterns];
   manager.getPromptTemplatePaths = () => [...EMPTY_RESOURCE_PATHS];
   manager.getThemePaths = () => [...EMPTY_RESOURCE_PATHS];
 
@@ -206,6 +215,11 @@ function skillRelativePath(skill: RuntimeSkillLike): string | undefined {
 
 function skillMatchesRef(skill: RuntimeSkillLike, ref: SkillRef): boolean {
   const sourceInfo = skill.sourceInfo;
+  if (ref.scope && ref.scope !== "package") {
+    if (sourceInfo?.origin === "package" || (sourceInfo?.scope && sourceInfo.scope !== ref.scope)) return false;
+    if (ref.name && skill.name !== ref.name) return false;
+    return normalizeRefPath(skill.filePath) === normalizeRefPath(ref.path);
+  }
   if (sourceInfo?.source !== ref.source) return false;
   if (ref.scope === "package") {
     if (sourceInfo.origin !== "package") return false;
@@ -223,6 +237,7 @@ function skillMatchesRef(skill: RuntimeSkillLike, ref: SkillRef): boolean {
 }
 
 function skillHiddenRefMatchBeforeMetadata(skill: RuntimeSkillLike, ref: SkillRef): "match" | "no-match" | "unverifiable" {
+  if (ref.scope && ref.scope !== "package") return skillMatchesRef(skill, ref) ? "match" : "no-match";
   if (skill.sourceInfo?.origin === "package") return skillMatchesRef(skill, ref) ? "match" : "no-match";
   if (ref.name && skill.name !== ref.name) return "no-match";
   const filePath = normalizeRefPath(skill.filePath);
@@ -318,6 +333,66 @@ export function getProfileRuntimeToolMetadata(session: ProfileToolPolicySession,
         : {}),
     };
   });
+}
+
+export function resolveProfileSnapshotToolsFromRuntime(
+  session: ProfileToolPolicySession,
+  snapshot: CapabilitySnapshotV1,
+): CapabilitySnapshotV1 {
+  const selectedSources = new Set(snapshot.plugins.map((plugin) => typeof plugin === "string" ? plugin : plugin.source));
+  const pluginTools: PluginToolSnapshot[] = [];
+  const diagnostics: ProfileDiagnostic[] = [];
+  for (const tool of session.getAllTools()) {
+    if (toolProvenance(tool) !== "plugin") continue;
+    const source = tool.sourceInfo?.source;
+    const extension = tool.sourceInfo?.path;
+    if (!source || !selectedSources.has(source)) continue;
+    if (!extension) {
+      diagnostics.push({
+        type: "error",
+        message: `Selected plugin tool '${tool.name}' has no runtime extension path.`,
+        source,
+      });
+      continue;
+    }
+    pluginTools.push({
+      name: tool.name,
+      source,
+      extension: normalizeRefPath(extension),
+      provenance: "plugin",
+      metadataResolved: true,
+    });
+  }
+  pluginTools.sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source));
+  if (pluginTools.length !== new Set(pluginTools.map((tool) => tool.name)).size) {
+    diagnostics.push({ type: "error", message: "Multiple selected plugin providers registered the same tool name at runtime." });
+  }
+  if (diagnostics.length > 0) {
+    const error = new Error("Selected plugin tool metadata could not be resolved from the isolated runtime.");
+    (error as Error & { diagnostics?: ProfileDiagnostic[] }).diagnostics = diagnostics;
+    throw error;
+  }
+
+  const requestedBuiltins = [...snapshot.tools.requestedBuiltinTools];
+  const requestedBuiltinSet = new Set(requestedBuiltins);
+  const conflicts: ToolConflict[] = pluginTools
+    .filter((tool) => requestedBuiltinSet.has(tool.name))
+    .map((tool) => ({
+      name: tool.name,
+      builtinSelected: true,
+      selectedProvider: "plugin" as const,
+      pluginSource: tool.source,
+      message: `Plugin tool '${tool.name}' from ${tool.source} overrides the selected built-in tool.`,
+    }));
+  return {
+    ...cloneJson(snapshot),
+    tools: {
+      ...cloneJson(snapshot.tools),
+      pluginTools,
+      activeToolNames: uniqueStrings([...requestedBuiltins, ...pluginTools.map((tool) => tool.name)]),
+      conflicts,
+    },
+  };
 }
 
 export function applyProfileToolPolicy(session: ProfileToolPolicySession, snapshot: CapabilitySnapshotV1): RuntimeToolMetadata[] {
@@ -463,10 +538,12 @@ export function validateProfileRuntimeAgainstSnapshot(
     for (const loaded of loadedSkills) {
       const sourceInfo = loaded.sourceInfo;
       const selectedPackageSkill = sourceInfo?.origin === "package" && selectedSources.has(sourceInfo.source);
-      if (!selectedPackageSkill) {
+      const selectedStandaloneSkill = sourceInfo?.origin !== "package"
+        && snapshot.skills.visibleSkillRefs.some((visible) => visible.scope !== "package" && skillMatchesRef(loaded, visible));
+      if (!selectedPackageSkill && !selectedStandaloneSkill) {
         diagnostics.push({
           type: "error",
-          message: `Profile runtime loaded skill '${loaded.name}' outside the selected package capability set.`,
+          message: `Profile runtime loaded skill '${loaded.name}' outside the immutable skill capability set.`,
           source: sourceInfo?.source,
           path: skillRelativePath(loaded) ?? loaded.filePath,
         });
@@ -476,7 +553,7 @@ export function validateProfileRuntimeAgainstSnapshot(
         diagnostics.push({
           type: "error",
           message: `Profile runtime loaded hidden skill '${loaded.name}'.`,
-          source: sourceInfo.source,
+          source: sourceInfo?.source ?? loaded.filePath,
           path: skillRelativePath(loaded) ?? loaded.filePath,
         });
       }

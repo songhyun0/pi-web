@@ -11,7 +11,7 @@ import type { AgentSessionLike, BashCommandResult, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse } from "./types";
 import { getPiCodexFastModeState, loadPiCodexFastModeConfig, PI_CODEX_FAST_COMMAND_NAME, PI_CODEX_FAST_PACKAGE_NAME } from "./pi-codex-fast";
 import { getProjectTrustStatus } from "./project-trust-core";
-import { applyProfileToolPolicy, createProfileScopedRuntimeOptions, getProfileRuntimeToolMetadata, validateProfileRuntimeAgainstSnapshot, type RuntimeToolMetadata } from "./profile-runtime";
+import { applyProfileToolPolicy, createProfileScopedRuntimeOptions, getProfileRuntimeToolMetadata, resolveProfileSnapshotToolsFromRuntime, validateProfileRuntimeAgainstSnapshot, type RuntimeToolMetadata } from "./profile-runtime";
 import {
   getSessionProfileSnapshot,
   restoreSessionProfileSnapshot,
@@ -52,6 +52,7 @@ export interface StartRpcSessionRuntimeOptions {
   resourceLoaderReloadOptions?: CreateAgentSessionServicesOptions["resourceLoaderReloadOptions"];
   autoStart?: boolean;
   isolateSessionFile?: boolean;
+  resolveProfileTools?: boolean;
 }
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -89,7 +90,7 @@ function extractUserMessageText(content: unknown): string {
 
 export class AgentSessionWrapper {
   public readonly inner: AgentSessionLike;
-  private readonly profileSnapshot?: CapabilitySnapshotV1;
+  private profileSnapshot?: CapabilitySnapshotV1;
   private readonly agentDir: string;
   private listeners: EventListener[] = [];
   private readonly extensionUi: ExtensionUiBridge;
@@ -106,19 +107,22 @@ export class AgentSessionWrapper {
   private shutdownPromise: Promise<void> | null = null;
   private profileToolGuardSuspended = false;
   private fatalProfilePolicyError: Error | null = null;
+  private profileToolPolicyDeferred: boolean;
 
   constructor(
     inner: AgentSessionLike,
     profileSnapshot?: CapabilitySnapshotV1,
     agentDir = getAgentDir(),
     isolatedSessionFile?: { originalPath: string; temporaryPath: string; initialBytes: Buffer; mode: "copy" | "move" },
+    deferProfileToolPolicy = false,
   ) {
     this.inner = inner;
     this.profileSnapshot = profileSnapshot;
     this.agentDir = agentDir;
     this.isolatedSessionFile = isolatedSessionFile ?? null;
+    this.profileToolPolicyDeferred = Boolean(profileSnapshot && deferProfileToolPolicy);
     this.extensionUi = new ExtensionUiBridge({ emit: (event) => this.emit(event as AgentEvent) });
-    if (this.profileSnapshot) this.installProfileToolMutationGuards();
+    if (this.profileSnapshot && !this.profileToolPolicyDeferred) this.installProfileToolMutationGuards();
   }
 
   get sessionId(): string {
@@ -157,6 +161,18 @@ export class AgentSessionWrapper {
 
   get capabilitySnapshot(): CapabilitySnapshotV1 | undefined {
     return this.profileSnapshot ? cloneJson(this.profileSnapshot) : undefined;
+  }
+
+  finalizeProfileToolPolicy(): CapabilitySnapshotV1 | undefined {
+    if (!this.profileSnapshot) return undefined;
+    if (this.profileToolPolicyDeferred) {
+      if (!this.extensionsBound) throw new Error("Profile tool policy cannot be finalized before extension binding.");
+      this.profileSnapshot = resolveProfileSnapshotToolsFromRuntime(this.inner, this.profileSnapshot);
+      this.profileToolPolicyDeferred = false;
+      this.installProfileToolMutationGuards();
+    }
+    this.applyProfileToolPolicy("after-extension-binding");
+    return cloneJson(this.profileSnapshot);
   }
 
   get sessionFile(): string {
@@ -254,7 +270,7 @@ export class AgentSessionWrapper {
   }
 
   applyProfileToolPolicy(phase: "after-session-creation" | "after-extension-binding" | "after-reload" = "after-session-creation"): RuntimeToolMetadata[] | undefined {
-    if (!this.profileSnapshot) return undefined;
+    if (!this.profileSnapshot || this.profileToolPolicyDeferred) return undefined;
     const metadata = applyProfileToolPolicy(this.inner, this.profileSnapshot);
     if (phase !== "after-session-creation") {
       const validation = validateProfileRuntimeAgainstSnapshot(this.inner, this.profileSnapshot, metadata);
@@ -325,7 +341,7 @@ export class AgentSessionWrapper {
         throw this.fatalProfilePolicyError ?? new Error("Profile runtime closed during extension binding.");
       }
       this.extensionsBound = true;
-      this.applyProfileToolPolicy("after-extension-binding");
+      if (!this.profileToolPolicyDeferred) this.applyProfileToolPolicy("after-extension-binding");
       this.applyForcedEmptySystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
@@ -1122,11 +1138,11 @@ async function createRpcSessionWrapper(
     inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
   }
 
-  const wrapper = new AgentSessionWrapper(inner, profileSnapshot, agentDir, isolatedSessionFile);
+  const wrapper = new AgentSessionWrapper(inner, profileSnapshot, agentDir, isolatedSessionFile, runtimeOptions.resolveProfileTools ?? false);
   // When all tools are disabled, clear the system prompt entirely.
   // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
   // keep this forced after extension resource discovery and reloads as well.
-  if (profileSnapshot) {
+  if (profileSnapshot && !runtimeOptions.resolveProfileTools) {
     wrapper.applyProfileToolPolicy("after-session-creation");
   } else if (toolNames?.length === 0) {
     wrapper.setForceEmptySystemPrompt(true);
