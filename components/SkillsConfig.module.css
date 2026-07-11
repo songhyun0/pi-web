@@ -1,0 +1,569 @@
+.dialogBody {
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.workspace {
+  width: 100%;
+  min-height: 520px;
+  height: min(720px, calc(100dvh - 190px));
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.navigation {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.navigationHeader {
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-half);
+  border-bottom: 1px solid var(--border);
+}
+
+.navigationTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.navigationDescription {
+  margin: 0 0 var(--space-half);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inventoryScroll {
+  min-height: 0;
+  flex: 1;
+  padding: var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.loadingList {
+  padding: var(--space-1);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.navSection {
+  display: grid;
+  gap: 2px;
+}
+
+.navSection + .navSection {
+  margin-top: var(--space-2);
+}
+
+.navSectionHeading {
+  margin: 0;
+  padding: var(--space-half) var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.skillRow {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  padding: var(--space-1);
+  display: grid;
+  gap: 3px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
+}
+
+.skillRow:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.skillRow:focus-visible,
+.resultCard a:focus-visible,
+.registryLink:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.skillRowSelected {
+  color: var(--text);
+  background: var(--bg-selected);
+}
+
+.skillRowTop {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+}
+
+.skillName {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skillDescription,
+.skillSource {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skillSource {
+  font-family: var(--font-mono);
+}
+
+.inventoryEmpty {
+  padding: var(--space-3) var(--space-1);
+}
+
+.navigationFooter {
+  padding: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+
+.addButton {
+  width: 100%;
+}
+
+.addButtonSelected {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+}
+
+.detailPanel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.mobileDetailHeader {
+  display: none;
+}
+
+.detailScroll {
+  min-height: 0;
+  flex: 1;
+  padding: var(--space-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.detailLoading {
+  width: min(100%, 780px);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.detailEmpty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editorStack {
+  width: min(100%, 800px);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.editorHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.badgeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  flex-wrap: wrap;
+}
+
+.editorTitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.editorDescription {
+  margin: var(--space-half) 0 0;
+  max-width: 68ch;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.formSection {
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.formSectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.formSectionTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.formSectionDescription {
+  margin: var(--space-half) 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.formSectionBody {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.commandHint,
+.installPath {
+  padding: var(--space-1);
+  display: grid;
+  gap: var(--space-half);
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.commandHint code,
+.installPath code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.metadataGrid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.metadataGrid > div {
+  min-width: 0;
+  padding: var(--space-1);
+  display: grid;
+  gap: 3px;
+  background: var(--bg-panel);
+}
+
+.metadataGrid dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.metadataGrid dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metadataGrid code {
+  color: inherit;
+  font-family: var(--font-mono);
+}
+
+.diagnosticList {
+  margin: var(--space-half) 0 0;
+  padding-left: var(--space-2);
+  display: grid;
+  gap: var(--space-half);
+}
+
+.searchForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-1);
+}
+
+.resultSkeletons,
+.resultList {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.resultCard {
+  min-width: 0;
+  min-height: 72px;
+  padding: var(--space-1-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.resultCopy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 4px;
+}
+
+.resultTitleRow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.resultTitleRow strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultCopy > code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.resultMeta a,
+.registryLink {
+  width: fit-content;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.resultMeta a:hover,
+.registryLink:hover {
+  text-decoration: underline;
+}
+
+.footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.footerStatus {
+  min-width: 0;
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.footerStatusText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) and (min-width: 641px) {
+  .workspace {
+    grid-template-columns: 232px minmax(0, 1fr);
+  }
+
+  .detailScroll {
+    padding: var(--space-2);
+  }
+
+  .metadataGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dialogBody {
+    flex: 1;
+  }
+
+  .workspace {
+    min-height: 0;
+    height: 100%;
+    display: block;
+  }
+
+  .navigation {
+    width: 100%;
+    height: 100%;
+    border-right: 0;
+  }
+
+  .workspace[data-detail="true"] .navigation {
+    display: none;
+  }
+
+  .detailPanel {
+    display: none;
+    width: 100%;
+    height: 100%;
+  }
+
+  .workspace[data-detail="true"] .detailPanel {
+    display: flex;
+  }
+
+  .mobileDetailHeader {
+    min-height: var(--control-touch);
+    padding: var(--space-half) var(--space-1-5);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-1);
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mobileDetailHeader strong {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 12px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobileBackButton {
+    margin-left: calc(var(--space-half) * -1);
+  }
+
+  .detailScroll {
+    padding: var(--space-1-5);
+  }
+
+  .editorHeading,
+  .formSectionHeader {
+    flex-direction: column;
+  }
+
+  .formSection {
+    padding: var(--space-1-5);
+  }
+
+  .metadataGrid,
+  .searchForm {
+    grid-template-columns: 1fr;
+  }
+
+  .searchForm > button {
+    width: 100%;
+  }
+
+  .resultCard {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .resultCard > button {
+    width: 100%;
+  }
+
+  .footerStatusText {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .skillRow,
+  .resultCard {
+    min-height: var(--control-touch);
+  }
+}

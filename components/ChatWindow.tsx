@@ -1,25 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { type AgentPhase, type NoticeItem, useAgentSession } from "@/hooks/useAgentSession";
-import { useProfiles } from "@/hooks/useProfiles";
-import { useSessionProfile } from "@/hooks/useSessionProfile";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useProfiles } from "@/hooks/useProfiles";
+import { useSessionProfile } from "@/hooks/useSessionProfile";
 import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { SessionStatsInfo } from "@/lib/pi-types";
-import type { SlashUiAction } from "@/lib/slash-command-registry";
 import type { ProfileRef } from "@/lib/profiles";
+import type { SlashUiAction } from "@/lib/slash-command-registry";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import styles from "./ChatWindow.module.css";
 import { ExtensionUiHost, ExtensionUiInline } from "./ExtensionUiHost";
 import { MessageView } from "./MessageView";
-import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
-import { ProfileSelector } from "./ProfileSelector";
 import { ProfileManagerModal } from "./ProfileManagerModal";
+import { ProfileSelector } from "./ProfileSelector";
+import { ForkSelectorModal, SessionTreeSelectorModal } from "./SessionCommandModals";
 
 interface Props {
   appName?: string;
@@ -37,6 +38,7 @@ interface Props {
   onSlashUiAction?: (action: SlashUiAction) => void | Promise<void>;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  onRetry?: () => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -52,9 +54,6 @@ function phaseLabel(phase: AgentPhase): string {
   return "Thinking...";
 }
 
-const CHAT_MINIMAP_WIDTH = 36;
-const CHAT_COLUMN_PADDING = 16;
-const CHAT_INPUT_RIGHT_PADDING = CHAT_COLUMN_PADDING + CHAT_MINIMAP_WIDTH;
 
 function hasFinalAssistantAnswer(message: AgentMessage): boolean {
   if (message.role !== "assistant") return false;
@@ -106,44 +105,26 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   if (toolCallCount > 0) parts.push(`${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`);
 
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div className={styles.processGroup}>
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          width: "auto",
-          minHeight: 24,
-          padding: "2px 0",
-          border: "none",
-          background: "transparent",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-        }}
+        className={styles.processToggle}
+        data-expanded={expanded || undefined}
+        onClick={() => setExpanded((value) => !value)}
         title={expanded ? "Collapse process details" : "Expand process details"}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <polyline points="4 2.5 7.5 6 4 9.5" />
         </svg>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {parts.join(" · ")}
-        </span>
+        <span>{parts.join(" · ")}</span>
       </button>
-      {expanded && (
-        <div style={{ marginTop: 8 }}>
-          {children}
-        </div>
-      )}
+      {expanded && <div className={styles.processBody}>{children}</div>}
     </div>
   );
 }
 
-export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onSlashUiAction, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onSlashUiAction, onContextUsageChange, onOpenFile, onRetry }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -247,6 +228,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     : null;
   const sessionStatsRef = useRef(sessionStats);
   sessionStatsRef.current = sessionStats;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the scalar key intentionally gates structurally equivalent stats updates.
   useEffect(() => {
     onSessionStatsChange?.(sessionStatsRef.current);
   }, [statsKey, onSessionStatsChange]);
@@ -258,6 +240,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     : null;
   const contextUsageRef = useRef(contextUsage);
   contextUsageRef.current = contextUsage;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the scalar key intentionally gates structurally equivalent context updates.
   useEffect(() => {
     onContextUsageChange?.(contextUsageRef.current);
   }, [ctxKey, onContextUsageChange]);
@@ -433,23 +416,39 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-text-muted">
-        Loading session...
+      <div className={styles.state} aria-live="polite" aria-busy="true">
+        <div className={styles.stateCard}>
+          <span className={styles.stateSpinner} aria-hidden="true" />
+          <span className={styles.stateEyebrow}>Restoring workspace</span>
+          <h2 className={styles.stateTitle}>Loading conversation</h2>
+          <p className={styles.stateDescription}>Messages, branches, and runtime state are being restored.</p>
+        </div>
       </div>
     );
   }
-
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center text-red-400">
-        {error}
+      <div className={styles.state} data-tone="danger" role="alert">
+        <div className={styles.stateCard}>
+          <svg className={styles.stateIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><line x1="12" y1="7" x2="12" y2="13" /><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" /></svg>
+          <span className={styles.stateEyebrow}>Session diagnostic</span>
+          <h2 className={styles.stateTitle}>Conversation unavailable</h2>
+          <p className={styles.stateDescription}>The session could not be restored. Its file and runtime state were left unchanged.</p>
+          <code className={styles.stateDetail}>{error}</code>
+          {session && onRetry && (
+            <button type="button" className={styles.stateAction} onClick={onRetry}>
+              Try again
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: the full conversation surface is the image drop target.
     <div
-      className="relative flex h-full flex-col overflow-hidden"
+      className={styles.root}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -463,33 +462,16 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
         />
       )}
       {isDragOver && !agentRunning && (
-        <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className={styles.dropOverlay} aria-hidden="true">
+          <div className={styles.dropRings}>
             {[0, 0.8, 1.6].map((delay) => (
-              <div
-                key={delay}
-                className="absolute h-[720px] w-[720px] rounded-full border-[1.5px] border-solid border-[rgba(37,99,235,0.5)] animate-[drop-ripple_2.4s_ease-out_infinite_backwards]"
-                style={{ transformOrigin: "center", animationDelay: `${delay}s` }}
-              />
+              <div key={delay} className={styles.dropRing} style={{ animationDelay: `${delay}s` }} />
             ))}
           </div>
-          <svg
-            width="280" height="280" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg"
-            className="drop-shadow-[0_6px_18px_rgba(37,99,235,0.18)]"
-          >
-            <rect x="28" y="44" width="84" height="60" rx="8" fill="rgba(37,99,235,0.08)" stroke="rgba(37,99,235,0.50)" strokeWidth="1.8"/>
-            <path d="M36 100 L54 72 L68 88 L80 74 L104 100Z" fill="rgba(37,99,235,0.16)" stroke="rgba(37,99,235,0.40)" strokeWidth="1.4" strokeLinejoin="round"/>
-            <circle cx="96" cy="58" r="8" fill="rgba(37,99,235,0.22)" stroke="rgba(37,99,235,0.55)" strokeWidth="1.6"/>
-            <g stroke="rgba(37,99,235,0.45)" strokeWidth="1.4" strokeLinecap="round">
-              <line x1="96" y1="46" x2="96" y2="43"/>
-              <line x1="96" y1="70" x2="96" y2="73"/>
-              <line x1="84" y1="58" x2="81" y2="58"/>
-              <line x1="108" y1="58" x2="111" y2="58"/>
-              <line x1="87.5" y1="49.5" x2="85.4" y2="47.4"/>
-              <line x1="104.5" y1="66.5" x2="106.6" y2="68.6"/>
-              <line x1="104.5" y1="49.5" x2="106.6" y2="47.4"/>
-              <line x1="87.5" y1="66.5" x2="85.4" y2="68.6"/>
-            </g>
+          <svg className={styles.dropIcon} viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="12" y="17" width="40" height="31" rx="4" />
+            <circle cx="43" cy="26" r="3" />
+            <path d="m16 44 11-13 8 8 5-6 8 11" />
           </svg>
         </div>
       )}
@@ -526,31 +508,16 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       )}
 
       {isEmptyNew ? (
-        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
-          <div className="w-full max-w-[820px]">
-            <div
-              className="mb-3"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                marginLeft: 16,
-                marginRight: 52,
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flex: 1, lineHeight: 1.4, overflow: "hidden" }}>
-                <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: 0, color: "var(--text)", flexShrink: 0, whiteSpace: "nowrap" }}>π</span>
-                <span title={appName} style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, letterSpacing: 0, flexShrink: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{appName}</span>
+        <div className={styles.empty}>
+          <div className={styles.emptyInner}>
+            <div className={styles.brandRow}>
+              <div className={styles.brandIdentity}>
+                <span className={styles.brandMark}>π</span>
+                <span className={styles.brandName} title={appName}>{appName}</span>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  web <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}</span>
-                </span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  pi <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</span>
-                </span>
+              <div className={styles.versions}>
+                <span>web <strong>v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}</strong></span>
+                <span>pi <strong>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</strong></span>
               </div>
             </div>
             <NoticeShelf notices={notices} align="right" />
@@ -559,25 +526,15 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
         </div>
       ) : (
       <>
-      <div className="relative flex flex-1 overflow-hidden">
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: 0,
-            right: isMobile ? 0 : CHAT_MINIMAP_WIDTH,
-            zIndex: 40,
-            padding: `0 ${CHAT_COLUMN_PADDING}px`,
-            pointerEvents: "none",
-          }}
-        >
-          <div style={{ maxWidth: 820, margin: "0 auto" }}>
+      <div className={styles.conversation}>
+        <div className={styles.floatingNotices}>
+          <div className={styles.column}>
             <NoticeShelf notices={notices} floating align="right" />
           </div>
         </div>
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
-          <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
-            <div style={{ maxWidth: 820, margin: "0 auto" }}>
+        <div ref={scrollContainerRef} className={styles.timeline}>
+          <div className={styles.timelinePadding}>
+            <div className={styles.column}>
               <ExtensionUiInline statuses={extensionStatuses} widgets={aboveEditorWidgets} chrome={extensionChrome} compatibility={extensionCompatibility} />
 
             {(() => {
@@ -649,7 +606,7 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
                 );
                 if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
                 return (
-                  <div key={`${keyPrefix}-${idx}`} ref={attachVisibleRef(idx, currentRefIdx)}>
+                  <div className={styles.messageAnchor} key={`${keyPrefix}-${idx}`} ref={attachVisibleRef(idx, currentRefIdx)}>
                     {view}
                   </div>
                 );
@@ -744,13 +701,13 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
             )}
 
             {agentRunning && !streamState.streamingMessage && (
-              <div className="py-2 text-[13px] text-text-muted">
-                <span className="animate-[pulse_1.5s_infinite]">{phaseLabel(agentPhase)}</span>
-              </div>
+              <output className={styles.phase}>
+                <span>{phaseLabel(agentPhase)}</span>
+              </output>
             )}
 
             {agentRunning && (
-              <div style={{ height: scrollContainerRef.current ? scrollContainerRef.current.clientHeight : "80vh" }} />
+              <div className={styles.scrollSpacer} style={{ height: scrollContainerRef.current ? scrollContainerRef.current.clientHeight : "80vh" }} />
             )}
 
             <div ref={messagesEndRef} />
@@ -767,14 +724,9 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
         )}
       </div>
 
-      <div className="relative">
-        <div
-          style={{
-            padding: `0 ${CHAT_COLUMN_PADDING}px`,
-            paddingRight: isMobile ? CHAT_COLUMN_PADDING : CHAT_INPUT_RIGHT_PADDING,
-          }}
-        >
-          <div style={{ maxWidth: 820, margin: "0 auto" }}>
+      <div className={styles.composerRegion}>
+        <div className={`${styles.extensionFooter} ${!isMobile ? styles.desktopComposerOffset : ""}`}>
+          <div className={styles.column}>
             <ExtensionUiInline widgets={belowEditorWidgets} chrome={{ headerLines: [], footerLines: extensionChrome.footerLines, working: { visible: false } }} />
           </div>
         </div>
@@ -790,68 +742,19 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
 function NoticeShelf({ notices, floating = false, align = "left" }: { notices: NoticeItem[]; floating?: boolean; align?: "left" | "right" }) {
   if (notices.length === 0) return null;
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: align === "right" ? "flex-end" : "stretch",
-        marginBottom: floating ? 0 : 10,
-      }}
-    >
-      {notices.map((notice, index) => {
-        const color = notice.type === "error"
-          ? "#ef4444"
-          : notice.type === "warning"
-            ? "#d97706"
-            : notice.type === "success"
-              ? "#10b981"
-              : "var(--accent)";
-        return (
-          <div
-            key={notice.id}
-            className="notice-shelf-item"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              minHeight: 60,
-              height: 60,
-              maxHeight: 60,
-              marginBottom: index === notices.length - 1 ? 0 : 6,
-              overflow: "hidden",
-              borderRadius: 14,
-              border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
-              background: "var(--bg)",
-              color: "var(--text-muted)",
-              width: "fit-content",
-              maxWidth: "min(100%, 620px)",
-              boxShadow: floating
-                ? "0 1px 2px rgba(15,23,42,0.05), 0 10px 28px -14px rgba(15,23,42,0.24)"
-                : "0 1px 2px rgba(15,23,42,0.04), 0 8px 24px -12px rgba(15,23,42,0.10)",
-              fontSize: 18,
-              lineHeight: 1.45,
-              transformOrigin: "top center",
-              animation: notice.exiting
-                ? "notice-shelf-out 0.18s ease-in forwards"
-                : "notice-shelf-in 0.18s ease-out both",
-              padding: "0 12px",
-            }}
-          >
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: color,
-                flexShrink: 0,
-              }}
-            />
-            <span style={{ padding: "14px 0", minWidth: 0, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {notice.message}
-            </span>
-          </div>
-        );
-      })}
+    <div className={styles.noticeShelf} data-floating={floating || undefined} data-align={align}>
+      {notices.map((notice) => (
+        <div
+          key={notice.id}
+          className={styles.noticeItem}
+          data-tone={notice.type}
+          data-exiting={notice.exiting || undefined}
+          role={notice.type === "error" ? "alert" : "status"}
+        >
+          <span className={styles.noticeDot} aria-hidden="true" />
+          <span className={styles.noticeMessage}>{notice.message}</span>
+        </div>
+      ))}
     </div>
   );
 }

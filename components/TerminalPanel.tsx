@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FitAddon as GhosttyFitAddon, Terminal as GhosttyTerminal } from "ghostty-web";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import styles from "./TerminalPanel.module.css";
+import { Button, Dialog } from "./ui";
 
 interface Props {
   cwd: string | null | undefined;
@@ -108,12 +110,6 @@ function basename(filePath: string | null | undefined): string {
   return normalized.split("/").pop() || normalized;
 }
 
-function statusColor(status: TerminalStatus): string {
-  if (status === "connected") return "#22c55e";
-  if (status === "connecting" || status === "loading") return "#f59e0b";
-  if (status === "error") return "#f87171";
-  return "var(--text-dim)";
-}
 
 function activeShellStorageKey(scopeId: string): string {
   return `pi-terminal-active-shell:${encodeURIComponent(scopeId)}`;
@@ -140,6 +136,31 @@ function shellLabel(index: number): string {
   return `Shell ${index}`;
 }
 
+function terminalErrorMessage(caught: unknown): string {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return /failed to fetch|networkerror/i.test(message)
+    ? "The companion terminal service could not be reached."
+    : message;
+}
+
+function TerminalState({ title, description, tone, loading = false, actions }: { title: string; description: string; tone?: "danger"; loading?: boolean; actions?: ReactNode }) {
+  return (
+    <div className={styles.state}>
+      <div className={styles.stateCard} data-tone={tone}>
+        {loading ? <span className={styles.stateSpinner} aria-hidden="true" /> : (
+        <svg className={styles.stateIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          {tone === "danger" ? <><line x1="12" y1="8" x2="12" y2="13" /><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none" /></> : <><polyline points="7 9 10 12 7 15" /><line x1="12" y1="15" x2="17" y2="15" /></>}
+        </svg>
+)}
+        <h3 className={styles.stateTitle}>{title}</h3>
+        <p className={styles.stateDescription}>{description}</p>
+        {actions && <div className={styles.stateActions}>{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function TerminalPanel({ cwd, scopeId }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [fontConfig, setFontConfig] = useState<TerminalFontConfig | null>(null);
@@ -149,6 +170,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
   const [shellTabs, setShellTabs] = useState<ShellTab[]>([]);
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const [connectVersion, setConnectVersion] = useState(0);
+  const [pendingAction, setPendingAction] = useState<{ kind: "kill" | "restart"; shell: ShellTab } | null>(null);
 
   const fontFamily = useMemo(() => buildFontFamily(fontConfig), [fontConfig]);
   const fontSize = fontConfig?.fontSize ?? 14;
@@ -205,17 +227,54 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
   }, [fontConfig?.shellsUrl, scopeId]);
 
   useEffect(() => {
-    if (!scopeId || !fontConfig?.shellsUrl) {
+    if (!scopeId) {
       setShellTabs([]);
       setActiveShellId(null);
+      setStatus("idle");
+      setStatusText("No shell");
+      return;
+    }
+    if (!fontConfig) {
+      setStatus("loading");
+      setStatusText("Loading configuration…");
+      return;
+    }
+    if (!fontConfig.shellsUrl) {
+      setShellTabs([]);
+      setActiveShellId(null);
+      setStatus("error");
+      setStatusText("Service unavailable");
       return;
     }
     let cancelled = false;
-    refreshShells(readActiveShellId(scopeId)).catch((e) => {
-      if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-    });
+    setStatus("loading");
+    setStatusText("Loading shells…");
+    refreshShells(readActiveShellId(scopeId))
+      .then((shells) => {
+        if (!cancelled && shells.length === 0) { setStatus("idle"); setStatusText("No shell"); }
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setError(terminalErrorMessage(caught));
+          setStatus("error");
+          setStatusText("Service unavailable");
+        }
+      });
     return () => { cancelled = true; };
-  }, [fontConfig?.shellsUrl, refreshShells, scopeId]);
+  }, [fontConfig, refreshShells, scopeId]);
+
+  const retryShellInventory = useCallback(() => {
+    setError(null);
+    setStatus("loading");
+    setStatusText("Loading shells…");
+    void refreshShells(scopeId ? readActiveShellId(scopeId) : null)
+      .then((shells) => { if (shells.length === 0) { setStatus("idle"); setStatusText("No shell"); } })
+      .catch((caught) => {
+        setError(terminalErrorMessage(caught));
+        setStatus("error");
+        setStatusText("Service unavailable");
+      });
+  }, [refreshShells, scopeId]);
 
   useEffect(() => {
     if (scopeId) writeActiveShellId(scopeId, activeShellId);
@@ -238,7 +297,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
       writeActiveShellId(scopeId, data.shell.shellId);
       setConnectVersion((key) => key + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(terminalErrorMessage(e));
     }
   }, [cwd, fontConfig?.shellsUrl, scopeId, shellTabs.length]);
 
@@ -254,6 +313,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       const shells = data.shells ?? [];
       setShellTabs(shells);
+      if (shells.length === 0) { setStatus("idle"); setStatusText("No shell"); }
       setActiveShellId((current) => {
         if (current && current !== shellId && shells.some((shell) => shell.shellId === current)) return current;
         const next = shells[shells.length - 1]?.shellId ?? null;
@@ -261,7 +321,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
         return next;
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(terminalErrorMessage(e));
     }
   }, [fontConfig?.shellsUrl, scopeId]);
 
@@ -286,17 +346,14 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
       setActiveShellId(data.shell.shellId);
       setConnectVersion((key) => key + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(terminalErrorMessage(e));
     }
   }, [activeShell, cwd, fontConfig?.shellsUrl, scopeId]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connectVersion intentionally rebuilds the Ghostty/WebSocket attachment.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !cwd || !fontConfig || !scopeId || !activeShellId) {
-      if (!activeShellId) {
-        setStatus("idle");
-        setStatusText("No shell");
-      }
       return;
     }
     const terminalContainer = container;
@@ -326,9 +383,11 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
         if (cancelled) return;
 
         const rootStyles = window.getComputedStyle(document.documentElement);
-        const background = rootStyles.getPropertyValue("--bg").trim() || "#111111";
-        const foreground = rootStyles.getPropertyValue("--text").trim() || "#d4d4d4";
-        const cursor = rootStyles.getPropertyValue("--accent").trim() || "#60a5fa";
+        const bodyStyles = window.getComputedStyle(document.body);
+        const background = rootStyles.getPropertyValue("--bg").trim() || bodyStyles.backgroundColor;
+        const foreground = rootStyles.getPropertyValue("--text").trim() || bodyStyles.color;
+        const cursor = rootStyles.getPropertyValue("--accent").trim() || foreground;
+        const selectionBackground = rootStyles.getPropertyValue("--bg-selected").trim() || background;
 
         term = new Terminal({
           cursorBlink: true,
@@ -340,7 +399,7 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
             background,
             foreground,
             cursor,
-            selectionBackground: "rgba(96, 165, 250, 0.35)",
+            selectionBackground,
           },
         });
 
@@ -394,10 +453,9 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
         });
       } catch (e) {
         if (cancelled) return;
-        const message = e instanceof Error ? e.message : String(e);
         setStatus("error");
         setStatusText("Error");
-        setError(message);
+        setError(terminalErrorMessage(e));
       }
     }
 
@@ -414,109 +472,115 @@ export function TerminalPanel({ cwd, scopeId }: Props) {
     };
   }, [cwd, fontConfig, fontFamily, fontSize, activeShellId, activeShellTitle, scopeId, connectVersion]);
 
+  const confirmPendingAction = () => {
+    const pending = pendingAction;
+    setPendingAction(null);
+    if (!pending) return;
+    if (pending.kind === "restart") void restartActiveShell();
+    else void killShell(pending.shell.shellId);
+  };
+
   return (
-    <div className="terminal-panel">
-      <style>{`
-        .terminal-panel { height: 100%; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
-        .terminal-panel-body { flex: 1; min-height: 0; padding: 8px; background: var(--bg); }
-        .terminal-panel-surface { width: 100%; height: 100%; overflow: hidden; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
-        .terminal-panel-surface canvas { display: block; }
-        .terminal-shell-tabs { display: flex; align-items: center; min-height: 32px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-        .terminal-shell-tab { height: 31px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
-        .terminal-shell-tab.active { background: var(--bg); color: var(--text); }
-        .terminal-shell-close { width: 16px; height: 16px; border: 0; border-radius: 4px; background: transparent; color: var(--text-dim); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-        .terminal-shell-close:hover { background: var(--bg-hover); color: var(--text); }
-      `}</style>
+    <div className={styles.panel}>
+      <Dialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => { if (!open) setPendingAction(null); }}
+        title={pendingAction?.kind === "restart" ? "Restart shell?" : "Kill shell?"}
+        description="Running processes in this shell may be interrupted."
+        variant="sheet"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setPendingAction(null)}>Cancel</Button>
+            <Button variant="danger" onClick={confirmPendingAction}>{pendingAction?.kind === "restart" ? "Restart shell" : "Kill shell"}</Button>
+          </>
+        }
+      >
+        <div className={styles.confirmCopy}>
+          <p>{pendingAction?.kind === "restart" ? "The active shell will be terminated and recreated in the same workspace." : "This shell and its running processes will be terminated."}</p>
+          {pendingAction && <div className={styles.confirmPath}>{pendingAction.shell.title} · {pendingAction.shell.cwd}</div>}
+        </div>
+      </Dialog>
 
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        minHeight: 36,
-        padding: "0 10px",
-        borderBottom: "1px solid var(--border)",
-        background: "var(--bg-panel)",
-        flexShrink: 0,
-        fontSize: 12,
-      }}>
-        <strong style={{ color: "var(--text)", fontSize: 12 }}>Terminal</strong>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-muted)", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
-          <span style={{ width: 7, height: 7, borderRadius: 999, background: statusColor(status), flexShrink: 0 }} />
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{statusText}</span>
-        </span>
-        {cwd && (
-          <span title={cwd} style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-            {basename(cwd)}
-          </span>
-        )}
-        <button
-          onClick={() => void createShell()}
-          disabled={!cwd || !scopeId || !fontConfig?.shellsUrl}
-          title="Create a new shell tab"
-          style={{ marginLeft: "auto", height: 24, padding: "0 8px", background: "transparent", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: !cwd || !scopeId ? "default" : "pointer", opacity: !cwd || !scopeId ? 0.5 : 1, fontSize: 11 }}
-        >
-          New shell
-        </button>
-        <button
-          onClick={() => void restartActiveShell()}
-          disabled={!activeShell || status === "loading" || status === "connecting"}
-          title="Kill and restart the active shell"
-          style={{ height: 24, padding: "0 8px", background: "transparent", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: !activeShell || status === "loading" || status === "connecting" ? "default" : "pointer", opacity: !activeShell ? 0.5 : 1, fontSize: 11 }}
-        >
-          Restart
-        </button>
-      </div>
+      <header className={styles.header}>
+        <h2 className={styles.heading}>Terminal</h2>
+        <output className={styles.status} data-status={status} aria-live="polite">
+          <span className={styles.statusDot} aria-hidden="true" />
+          <span className={styles.statusText}>{statusText}</span>
+        </output>
+        {cwd && <span className={styles.cwd} title={cwd}>{basename(cwd)}</span>}
+        <div className={styles.headerActions}>
+          <button type="button" className={styles.action} onClick={() => { void createShell(); }} disabled={!cwd || !scopeId || !fontConfig?.shellsUrl}>New shell</button>
+          <button
+            type="button"
+            className={styles.action}
+            onClick={() => { if (activeShell) setPendingAction({ kind: "restart", shell: activeShell }); }}
+            disabled={!activeShell || status === "loading" || status === "connecting"}
+          >
+            Restart
+          </button>
+        </div>
+      </header>
 
-      <div className="terminal-shell-tabs">
+      {shellTabs.length > 0 && (
+        <div className={styles.tabs} role="tablist" aria-label="Terminal shells">
         {shellTabs.map((tab) => {
           const active = tab.shellId === activeShellId;
           return (
-            <div
-              key={tab.shellId}
-              className={`terminal-shell-tab${active ? " active" : ""}`}
-              onClick={() => setActiveShellId(tab.shellId)}
-              title={`${tab.title} · ${tab.attached ? "attached" : "detached"}`}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setActiveShellId(tab.shellId);
-                }
-              }}
-            >
-              <span>{tab.title}</span>
-              {!tab.attached && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>detached</span>}
+            <div key={tab.shellId} className={styles.tabItem}>
               <button
                 type="button"
-                className="terminal-shell-close"
-                title={`Kill ${tab.title}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void killShell(tab.shellId);
-                }}
+                role="tab"
+                className={styles.tabSelect}
+                aria-selected={active}
+                onClick={() => setActiveShellId(tab.shellId)}
+                title={`${tab.title} · ${tab.attached ? "attached" : "detached"}`}
               >
-                ×
+                <span>{tab.title}</span>
+                {!tab.attached && <span className={styles.detached}>detached</span>}
+              </button>
+              <button
+                type="button"
+                className={styles.tabClose}
+                aria-label={`Kill ${tab.title}`}
+                title={`Kill ${tab.title}`}
+                onClick={() => setPendingAction({ kind: "kill", shell: tab })}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17" /><line x1="17" y1="7" x2="7" y2="17" /></svg>
               </button>
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
 
       {!cwd ? (
-        <div style={{ padding: 16, fontSize: 12, color: "var(--text-dim)" }}>Select a project to start a terminal</div>
+        <TerminalState title="Choose a project" description="Select a workspace before starting a terminal." />
+      ) : !fontConfig ? (
+        <TerminalState title="Loading terminal" description="Reading terminal service and font configuration." loading />
+      ) : !scopeId || !fontConfig.shellsUrl ? (
+        <TerminalState title="Terminal service unavailable" description="Start the companion terminal service, then reopen this view." tone="danger" />
       ) : error ? (
-        <div style={{ padding: 16, fontSize: 12, color: "#f87171", lineHeight: 1.5 }}>{error}</div>
+        <TerminalState
+          title="Terminal unavailable"
+          description={error}
+          tone="danger"
+          actions={
+            <>
+              {activeShell && <button type="button" className={styles.action} onClick={() => setPendingAction({ kind: "restart", shell: activeShell })}>Restart shell</button>}
+              <button type="button" className={styles.action} onClick={retryShellInventory}>Try again</button>
+            </>
+          }
+        />
       ) : !activeShell ? (
-        <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10, color: "var(--text-dim)", fontSize: 12 }}>
-          <div>No shell tab open</div>
-          <button onClick={() => void createShell()} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>
-            New shell
-          </button>
-        </div>
+        <TerminalState
+          title="No shell open"
+          description="Create a shell to start an interactive terminal in this workspace."
+          actions={<button type="button" className={styles.action} onClick={() => { void createShell(); }}>New shell</button>}
+        />
       ) : (
-        <div className="terminal-panel-body">
-          <div ref={containerRef} className="terminal-panel-surface" style={{ fontFamily, fontSize }} />
+        <div className={styles.body}>
+          <div ref={containerRef} className={styles.surface} style={{ fontFamily, fontSize }} />
         </div>
       )}
     </div>

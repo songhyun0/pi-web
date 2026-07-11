@@ -1,12 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useIsMobile } from "@/hooks/useIsMobile";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Badge,
+  Button,
+  Dialog,
+  EmptyState,
+  Field,
+  Input,
+  Notice,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  Switch,
+} from "@/components/ui";
 import { APP_DISPLAY_NAME_MAX_LENGTH, type AppSettings, DEFAULT_APP_SETTINGS } from "@/lib/app-settings";
-import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_MAX_WIDTH, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
+import styles from "./SettingsModal.module.css";
 
 type RuntimeSettingsScope = "global" | "project";
 type RuntimeSettingApplies = "immediate" | "next-request" | "reload" | "new-session";
+type SettingsTab = "runtime" | "app" | "integrations";
 
 type RuntimeSettingValue = {
   key: string;
@@ -50,6 +63,22 @@ interface Props {
   onOpenProjectTrust?: () => void;
 }
 
+type RuntimeGroupId = "session" | "context" | "reliability" | "security";
+type RuntimeUndo = {
+  key: string;
+  settingKey: string;
+  scope: RuntimeSettingsScope;
+  reset: boolean;
+  draft?: string;
+};
+
+const RUNTIME_GROUPS: Array<{ id: RuntimeGroupId; label: string }> = [
+  { id: "session", label: "Session behavior" },
+  { id: "context", label: "Context management" },
+  { id: "reliability", label: "Reliability" },
+  { id: "security", label: "Project security" },
+];
+
 function normalizeInput(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -70,82 +99,216 @@ function valueToDraft(value: unknown): string {
   return String(value);
 }
 
+function settingDraftValue(setting: RuntimeSettingValue, scope: RuntimeSettingsScope): string {
+  if (scope === "global") return valueToDraft(setting.globalValue ?? setting.defaultValue);
+  return valueToDraft(setting.projectValue ?? setting.globalValue ?? setting.defaultValue);
+}
+
+function settingHasOverride(setting: RuntimeSettingValue, scope: RuntimeSettingsScope): boolean {
+  return scope === "global" ? setting.globalValue !== undefined : setting.projectValue !== undefined;
+}
+
 function appliesText(applies: RuntimeSettingApplies): string {
   switch (applies) {
-    case "immediate": return "applies immediately";
-    case "next-request": return "next request";
-    case "reload": return "/reload required";
-    case "new-session": return "new session";
+    case "immediate": return "Immediate";
+    case "next-request": return "Next request";
+    case "reload": return "Reload required";
+    case "new-session": return "New session";
   }
 }
 
-function applyBadgeColor(applies: RuntimeSettingApplies): string {
-  switch (applies) {
-    case "immediate": return "var(--success)";
-    case "next-request": return "var(--accent)";
-    case "reload": return "var(--warning)";
-    case "new-session": return "var(--text-muted)";
-  }
+function appliesTone(applies: RuntimeSettingApplies): "neutral" | "accent" | "warning" {
+  if (applies === "next-request") return "accent";
+  if (applies === "reload") return "warning";
+  return "neutral";
 }
 
 function parseDraft(setting: RuntimeSettingValue, draft: string): unknown {
   if (setting.type === "boolean") return draft === "true";
   if (setting.type === "number") {
     const value = Number(draft);
-    if (!Number.isFinite(value)) throw new Error(`${setting.label} must be a number`);
-    if (setting.min !== undefined && value < setting.min) throw new Error(`${setting.label} must be >= ${setting.min}`);
+    if (!Number.isFinite(value)) throw new Error(`${setting.label} must be a number.`);
+    if (setting.min !== undefined && value < setting.min) throw new Error(`${setting.label} must be ${setting.min} or greater.`);
     return value;
   }
   if (setting.allowedValues && !setting.allowedValues.includes(draft)) {
-    throw new Error(`${setting.label} must be one of: ${setting.allowedValues.join(", ")}`);
+    throw new Error(`${setting.label} must be one of: ${setting.allowedValues.join(", ")}.`);
   }
   return draft;
 }
 
-function SettingControl({ setting, scope, value, disabled, onChange, onSave, onReset, saving }: {
+function canRestoreOverride(setting: RuntimeSettingValue, value: unknown): boolean {
+  try {
+    parseDraft(setting, valueToDraft(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeGroup(setting: RuntimeSettingValue): RuntimeGroupId {
+  if (setting.key.startsWith("compaction.")) return "context";
+  if (setting.key.startsWith("retry.")) return "reliability";
+  if (setting.key === "defaultProjectTrust") return "security";
+  return "session";
+}
+
+function seedRuntimeDrafts(response: RuntimeSettingsResponse): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const setting of response.settings) {
+    next[draftKey(setting.key, "global")] = settingDraftValue(setting, "global");
+    if (setting.scopes.includes("project")) {
+      next[draftKey(setting.key, "project")] = settingDraftValue(setting, "project");
+    }
+  }
+  return next;
+}
+
+function mergeRuntimeDrafts(
+  current: Record<string, string>,
+  previous: RuntimeSettingsResponse,
+  nextResponse: RuntimeSettingsResponse,
+  changedKey: string,
+): Record<string, string> {
+  const merged = { ...current };
+  const previousByKey = new Map(previous.settings.map((setting) => [setting.key, setting]));
+  for (const setting of nextResponse.settings) {
+    const oldSetting = previousByKey.get(setting.key);
+    for (const scope of setting.scopes) {
+      const key = draftKey(setting.key, scope);
+      const oldBaseline = oldSetting?.scopes.includes(scope) ? settingDraftValue(oldSetting, scope) : undefined;
+      if (key === changedKey || current[key] === undefined || current[key] === oldBaseline) {
+        merged[key] = settingDraftValue(setting, scope);
+      }
+    }
+  }
+  return merged;
+}
+
+function RuntimeSettingEditor({
+  setting,
+  scope,
+  value,
+  disabled,
+  saving,
+  dirty,
+  hasOverride,
+  onChange,
+  onSave,
+  onReset,
+}: {
   setting: RuntimeSettingValue;
   scope: RuntimeSettingsScope;
   value: string;
-  disabled?: boolean;
-  saving?: boolean;
+  disabled: boolean;
+  saving: boolean;
+  dirty: boolean;
+  hasOverride: boolean;
   onChange: (value: string) => void;
-  onSave: () => void;
+  onSave: (value?: string) => void;
   onReset: () => void;
 }) {
-  const inputStyle = { border: "1px solid var(--border)", borderRadius: 6, background: disabled ? "var(--bg-hover)" : "var(--bg)", color: disabled ? "var(--text-dim)" : "var(--text)", padding: "6px 8px", fontSize: 12, minWidth: 130 };
-  let input;
   if (setting.type === "boolean") {
-    input = (
-      <select value={value || "false"} disabled={disabled} onChange={(event) => onChange(event.target.value)} style={inputStyle}>
-        <option value="true">true</option>
-        <option value="false">false</option>
-      </select>
-    );
-  } else if (setting.allowedValues) {
-    input = (
-      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} style={inputStyle}>
-        {setting.allowedValues.map((allowed) => <option key={allowed} value={allowed}>{allowed}</option>)}
-      </select>
-    );
-  } else {
-    input = (
-      <input type={setting.type === "number" ? "number" : "text"} min={setting.min} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} style={inputStyle} />
+    const checked = value === "true";
+    return (
+      <div className={styles.editor}>
+        <div className={styles.switchRow}>
+          <Switch
+            className={styles.switchControl}
+            checked={checked}
+            disabled={disabled || saving}
+            onCheckedChange={(next) => {
+              const draft = String(next);
+              onChange(draft);
+              onSave(draft);
+            }}
+            label={checked ? "Enabled" : "Disabled"}
+            description={`${scope === "global" ? "Global default" : "Project override"} · ${saving ? "saving change…" : "saves immediately"}`}
+          />
+          <Button
+            variant="ghost"
+            size="compact"
+            disabled={disabled || saving || !hasOverride}
+            onClick={onReset}
+          >
+            Reset
+          </Button>
+        </div>
+      </div>
     );
   }
 
+  const control = setting.allowedValues ? (
+    <Select value={value} disabled={disabled || saving} onChange={(event) => onChange(event.target.value)}>
+      {!setting.allowedValues.includes(value) && (
+        <option value={value} disabled>{value ? `${value} (currently unavailable)` : "Unset (runtime default)"}</option>
+      )}
+      {setting.allowedValues.map((allowed) => <option key={allowed} value={allowed}>{allowed}</option>)}
+    </Select>
+  ) : (
+    <Input
+      type={setting.type === "number" ? "number" : "text"}
+      min={setting.min}
+      value={value}
+      disabled={disabled || saving}
+      mono={setting.type === "number"}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && dirty && !disabled && !saving) onSave();
+      }}
+    />
+  );
+
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <span style={{ width: 54, color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{scope}</span>
-      {input}
-      <button type="button" disabled={disabled || saving} onClick={onSave} style={{ border: "1px solid var(--accent)", background: disabled ? "var(--bg-hover)" : "var(--accent)", color: disabled ? "var(--text-dim)" : "white", borderRadius: 6, padding: "6px 9px", fontSize: 12, cursor: disabled || saving ? "default" : "pointer" }}>{saving ? "Saving…" : "Save"}</button>
-      <button type="button" disabled={disabled || saving} onClick={onReset} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: disabled ? "var(--text-dim)" : "var(--text-muted)", borderRadius: 6, padding: "6px 9px", fontSize: 12, cursor: disabled || saving ? "default" : "pointer" }}>Reset</button>
+    <div className={styles.editor}>
+      <Field label="Value">{control}</Field>
+      <div className={styles.controlActions}>
+        <Button variant="ghost" size="compact" disabled={disabled || saving || !hasOverride} onClick={onReset}>
+          Reset
+        </Button>
+        <Button size="compact" loading={saving} disabled={disabled || !dirty} onClick={() => onSave()}>
+          Apply
+        </Button>
+      </div>
     </div>
   );
 }
 
-export function SettingsModal({ settings, cwd, onClose, onSaved, onOpenModels, onOpenAuth, onOpenScopedModels, onOpenProjectTrust }: Props) {
-  const isMobile = useIsMobile();
-  const [tab, setTab] = useState<"runtime" | "app" | "integrations">("runtime");
+function LoadingSettings() {
+  return (
+    <output className={styles.loadingGrid} aria-live="polite" aria-label="Loading runtime settings">
+      {[0, 1, 2].map((item) => (
+        <div className={styles.loadingCard} key={item}>
+          <Skeleton width="42%" height={14} />
+          <Skeleton width="78%" height={12} />
+          <Skeleton width="100%" height={36} />
+        </div>
+      ))}
+    </output>
+  );
+}
+
+function TabLabel({ children, dirty = false }: { children: ReactNode; dirty?: boolean }) {
+  return (
+    <span className={styles.tabLabel}>
+      <span>{children}</span>
+      {dirty && <span className={styles.dirtyDot} aria-hidden="true" />}
+    </span>
+  );
+}
+
+export function SettingsModal({
+  settings,
+  cwd,
+  onClose,
+  onSaved,
+  onOpenModels,
+  onOpenAuth,
+  onOpenScopedModels,
+  onOpenProjectTrust,
+}: Props) {
+  const [tab, setTab] = useState<SettingsTab>("runtime");
+  const [scope, setScope] = useState<RuntimeSettingsScope>("global");
   const [displayName, setDisplayName] = useState(settings.displayName);
   const [savingApp, setSavingApp] = useState(false);
   const [appMessage, setAppMessage] = useState<string | null>(null);
@@ -154,78 +317,81 @@ export function SettingsModal({ settings, cwd, onClose, onSaved, onOpenModels, o
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeMessage, setRuntimeMessage] = useState<string | null>(null);
+  const [runtimeFeedbackKey, setRuntimeFeedbackKey] = useState<string | null>(null);
+  const [runtimeUndo, setRuntimeUndo] = useState<RuntimeUndo | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingRuntimeKey, setSavingRuntimeKey] = useState<string | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
   useEffect(() => {
     setDisplayName(settings.displayName);
     setAppError(null);
-    setAppMessage(null);
   }, [settings.displayName]);
 
   const normalizedDisplayName = useMemo(() => normalizeInput(displayName), [displayName]);
   const validationError = useMemo(() => {
     if (!normalizedDisplayName) return "Display name cannot be empty.";
     if (normalizedDisplayName.length > APP_DISPLAY_NAME_MAX_LENGTH) {
-      return `Display name must be ${APP_DISPLAY_NAME_MAX_LENGTH} characters or fewer.`;
+      return `Use ${APP_DISPLAY_NAME_MAX_LENGTH} characters or fewer.`;
     }
     return null;
   }, [normalizedDisplayName]);
   const appChanged = normalizedDisplayName !== settings.displayName;
 
-  const seedDrafts = useCallback((response: RuntimeSettingsResponse) => {
-    const next: Record<string, string> = {};
-    for (const setting of response.settings) {
-      next[draftKey(setting.key, "global")] = valueToDraft(setting.globalValue ?? setting.defaultValue);
-      if (setting.scopes.includes("project")) next[draftKey(setting.key, "project")] = valueToDraft(setting.projectValue ?? setting.globalValue ?? setting.defaultValue);
-    }
-    setDrafts(next);
-  }, []);
-
   const loadRuntime = useCallback(async () => {
+    setRuntimeFeedbackKey(null);
+    setRuntimeUndo(null);
     if (!cwd) {
       setRuntime(null);
-      setRuntimeError("No active project cwd is available.");
+      setRuntimeLoading(false);
+      setRuntimeError("Choose a project before editing runtime settings.");
       return;
     }
     setRuntimeLoading(true);
     setRuntimeError(null);
     try {
-      const res = await fetch(`/api/runtime-settings?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" });
-      const body = await res.json() as RuntimeSettingsResponse | { error?: string };
-      if (!res.ok) throw new Error("error" in body && body.error ? body.error : `HTTP ${res.status}`);
-      setRuntime(body as RuntimeSettingsResponse);
-      seedDrafts(body as RuntimeSettingsResponse);
+      const response = await fetch(`/api/runtime-settings?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" });
+      const body = await response.json() as RuntimeSettingsResponse | { error?: string };
+      if (!response.ok) throw new Error("error" in body && body.error ? body.error : `HTTP ${response.status}`);
+      const next = body as RuntimeSettingsResponse;
+      setRuntime(next);
+      setDrafts(seedRuntimeDrafts(next));
     } catch (error) {
       setRuntimeError(error instanceof Error ? error.message : String(error));
     } finally {
       setRuntimeLoading(false);
     }
-  }, [cwd, seedDrafts]);
+  }, [cwd]);
 
   useEffect(() => {
     void loadRuntime();
   }, [loadRuntime]);
 
+  const runtimeDirty = useMemo(() => {
+    if (!runtime) return false;
+    return runtime.settings.some((setting) => setting.scopes.some((settingScope) => {
+      const key = draftKey(setting.key, settingScope);
+      return drafts[key] !== undefined && drafts[key] !== settingDraftValue(setting, settingScope);
+    }));
+  }, [drafts, runtime]);
+  const hasUnsavedChanges = appChanged || runtimeDirty;
+
   const handleSaveApp = async () => {
-    if (savingApp) return;
-    if (validationError) {
-      setAppError(validationError);
-      return;
-    }
+    if (savingApp || validationError || !appChanged) return;
     setSavingApp(true);
     setAppError(null);
     setAppMessage(null);
     try {
-      const res = await fetch("/api/app-settings", {
+      const response = await fetch("/api/app-settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ displayName: normalizedDisplayName }),
       });
-      const data = await res.json() as AppSettings | { error?: string };
-      if (!res.ok) throw new Error("error" in data && data.error ? data.error : `HTTP ${res.status}`);
+      const data = await response.json() as AppSettings | { error?: string };
+      if (!response.ok) throw new Error("error" in data && data.error ? data.error : `HTTP ${response.status}`);
       onSaved(data as AppSettings);
-      setAppMessage("Saved web app settings.");
+      setAppMessage("Web app settings saved.");
     } catch (error) {
       setAppError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -233,25 +399,49 @@ export function SettingsModal({ settings, cwd, onClose, onSaved, onOpenModels, o
     }
   };
 
-  const patchRuntime = async (setting: RuntimeSettingValue, scope: RuntimeSettingsScope, reset = false) => {
-    if (!cwd || !runtime) return;
-    const key = draftKey(setting.key, scope);
+  const patchRuntime = async (
+    setting: RuntimeSettingValue,
+    targetScope: RuntimeSettingsScope,
+    reset = false,
+    draftOverride?: string,
+    recordUndo = true,
+  ) => {
+    if (!cwd || !runtime || savingRuntimeKey) return;
+    const key = draftKey(setting.key, targetScope);
+    const previousHadOverride = settingHasOverride(setting, targetScope);
+    const previousValue = targetScope === "global" ? setting.globalValue : setting.projectValue;
     setSavingRuntimeKey(key);
+    setRuntimeFeedbackKey(key);
+    setRuntimeUndo(null);
     setRuntimeError(null);
     setRuntimeMessage(null);
     try {
-      const path = scope === "global" ? runtime.scopes.global.path : runtime.scopes.project.path;
-      const value = reset ? null : parseDraft(setting, drafts[key] ?? "");
-      const res = await fetch("/api/runtime-settings", {
+      const path = targetScope === "global" ? runtime.scopes.global.path : runtime.scopes.project.path;
+      const value = reset ? null : parseDraft(setting, draftOverride ?? drafts[key] ?? "");
+      const response = await fetch("/api/runtime-settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, scope, updates: { [setting.key]: value } }),
+        body: JSON.stringify({ cwd, scope: targetScope, updates: { [setting.key]: value } }),
       });
-      const body = await res.json() as RuntimeSettingsResponse | { error?: string };
-      if (!res.ok) throw new Error(`${path}: ${"error" in body && body.error ? body.error : `HTTP ${res.status}`}`);
-      setRuntime(body as RuntimeSettingsResponse);
-      seedDrafts(body as RuntimeSettingsResponse);
-      setRuntimeMessage(`${setting.label} ${reset ? "reset" : "saved"} in ${scope} settings (${path}). ${appliesText(setting.applies)}.`);
+      const body = await response.json() as RuntimeSettingsResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error(`${path}: ${"error" in body && body.error ? body.error : `HTTP ${response.status}`}`);
+      }
+      const next = body as RuntimeSettingsResponse;
+      setDrafts((current) => mergeRuntimeDrafts(current, runtime, next, key));
+      setRuntime(next);
+      if (recordUndo && (!previousHadOverride || canRestoreOverride(setting, previousValue))) {
+        setRuntimeUndo({
+          key,
+          settingKey: setting.key,
+          scope: targetScope,
+          reset: !previousHadOverride,
+          draft: previousHadOverride ? valueToDraft(previousValue) : undefined,
+        });
+      }
+      setRuntimeMessage(recordUndo
+        ? `${setting.label} ${reset ? "reset" : "saved"} for ${targetScope}. ${appliesText(setting.applies)}.`
+        : `${setting.label} restored for ${targetScope}. ${appliesText(setting.applies)}.`);
     } catch (error) {
       setRuntimeError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -259,106 +449,381 @@ export function SettingsModal({ settings, cwd, onClose, onSaved, onOpenModels, o
     }
   };
 
-  const renderTabButton = (id: typeof tab, label: string) => (
-    <button type="button" onClick={() => setTab(id)} style={{ border: "none", borderBottom: tab === id ? "2px solid var(--accent)" : "2px solid transparent", background: tab === id ? "var(--bg-selected)" : "transparent", color: tab === id ? "var(--text)" : "var(--text-muted)", padding: "10px 12px", cursor: "pointer", fontSize: 13 }}>{label}</button>
+  const undoRuntimeChange = () => {
+    if (!runtime || !runtimeUndo) return;
+    const setting = runtime.settings.find((candidate) => candidate.key === runtimeUndo.settingKey);
+    if (!setting) return;
+    void patchRuntime(setting, runtimeUndo.scope, runtimeUndo.reset, runtimeUndo.draft, false);
+  };
+
+  const requestAction = useCallback((action: () => void) => {
+    if (savingApp) return;
+    if (hasUnsavedChanges) {
+      setPendingAction(() => action);
+      setDiscardOpen(true);
+      return;
+    }
+    action();
+  }, [hasUnsavedChanges, savingApp]);
+
+  const requestClose = useCallback(() => {
+    if (savingApp) return;
+    requestAction(onClose);
+  }, [onClose, requestAction, savingApp]);
+
+  const closeDiscardDialog = useCallback(() => {
+    setDiscardOpen(false);
+    setPendingAction(null);
+  }, []);
+
+  const confirmDiscard = useCallback(() => {
+    const action = pendingAction;
+    setDiscardOpen(false);
+    setPendingAction(null);
+    if (action) action();
+    else onClose();
+  }, [onClose, pendingAction]);
+
+  const visibleSettings = useMemo(() => {
+    if (!runtime) return [];
+    return runtime.settings.filter((setting) => setting.scopes.includes(scope));
+  }, [runtime, scope]);
+
+  const groupedSettings = useMemo(() => RUNTIME_GROUPS.map((group) => ({
+    ...group,
+    settings: visibleSettings.filter((setting) => runtimeGroup(setting) === group.id),
+  })).filter((group) => group.settings.length > 0), [visibleSettings]);
+
+  const projectBlocked = Boolean(runtime && scope === "project" && (
+    !runtime.scopes.project.readable || !runtime.scopes.project.writable || !runtime.projectTrusted
+  ));
+  const selectedScopePath = runtime ? runtime.scopes[scope].path : cwd ?? "No active project";
+  const selectedScopeWritable = runtime ? runtime.scopes[scope].writable : false;
+
+  const tabOptions = [
+    { value: "runtime", label: <TabLabel dirty={runtimeDirty}>Runtime</TabLabel>, ariaLabel: runtimeDirty ? "Runtime, unsaved changes" : "Runtime", disabled: savingApp && tab !== "runtime" },
+    { value: "app", label: <TabLabel dirty={appChanged}>Web app</TabLabel>, ariaLabel: appChanged ? "Web app, unsaved changes" : "Web app", disabled: savingApp && tab !== "app" },
+    { value: "integrations", label: <TabLabel>Integrations</TabLabel>, disabled: savingApp && tab !== "integrations" },
+  ];
+
+  const footer = (
+    <div className={styles.footer}>
+      <span className={styles.footerMessage}>
+        {hasUnsavedChanges ? "Unsaved changes" : tab === "runtime" ? selectedScopePath : "Settings are stored locally"}
+      </span>
+      {tab === "app" && (
+        <Button
+          variant="primary"
+          loading={savingApp}
+          disabled={Boolean(validationError) || !appChanged}
+          onClick={() => void handleSaveApp()}
+        >
+          Save app settings
+        </Button>
+      )}
+      <Button variant="secondary" disabled={savingApp} onClick={requestClose}>Close</Button>
+    </div>
   );
 
+  const integrationItems: Array<{ title: string; description: string; action?: () => void }> = [
+    { title: "Models", description: "Configure providers, model metadata, and API formats.", action: onOpenModels },
+    { title: "Scoped models", description: "Manage the model set available while cycling within a session.", action: onOpenScopedModels },
+    { title: "Provider authentication", description: "Connect subscriptions and manage provider API keys.", action: onOpenAuth },
+    { title: "Project trust", description: "Review local resources and decide whether this project may load them.", action: onOpenProjectTrust },
+  ];
+
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: SAFE_AREA_MODAL_PADDING, boxSizing: "border-box" }}>
-      <button type="button" aria-label="Close settings" onClick={onClose} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", padding: 0, border: "none", background: "transparent", cursor: "default" }} />
-      <div style={{ position: "relative", width: isMobile ? "100%" : 900, maxWidth: isMobile ? "100%" : SAFE_AREA_MODAL_MAX_WIDTH, maxHeight: SAFE_AREA_MODAL_MAX_HEIGHT, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-            <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Settings</span>
-            <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cwd ?? "No active cwd"}</code>
+    <>
+      <Dialog
+        open
+        onOpenChange={(nextOpen) => { if (!nextOpen) requestClose(); }}
+        title="Settings"
+        description={<code>{cwd ?? "No active project"}</code>}
+        variant="adaptive"
+        size="lg"
+        dismissible={!savingApp}
+        bodyClassName={styles.body}
+        footer={footer}
+      >
+        <div className={styles.stickyControls}>
+          <div className={styles.navigation}>
+            <SegmentedControl
+              value={tab}
+              options={tabOptions}
+              onValueChange={(next) => setTab(next as SettingsTab)}
+              label="Settings section"
+              fullWidth
+            />
           </div>
-          <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "2px 6px" }}>×</button>
-        </div>
-
-        <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-          {renderTabButton("runtime", "Runtime")}
-          {renderTabButton("app", "Web app")}
-          {renderTabButton("integrations", "Models/Auth")}
-        </div>
-
-        <div style={{ padding: 18, overflow: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
           {tab === "runtime" && (
-            <>
-              {runtimeLoading ? <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading runtime settings…</div> : runtimeError ? <div style={{ color: "#f87171", fontSize: 13 }}>{runtimeError}</div> : runtime && (
+            <div className={styles.scopeToolbar}>
+              <SegmentedControl
+                value={scope}
+                options={[
+                  { value: "global", label: "Global" },
+                  { value: "project", label: "Project", disabled: !cwd },
+                ]}
+                onValueChange={(next) => {
+                  setScope(next as RuntimeSettingsScope);
+                  setRuntimeMessage(null);
+                  setRuntimeError(null);
+                  setRuntimeFeedbackKey(null);
+                  setRuntimeUndo(null);
+                }}
+                label="Runtime settings scope"
+                fullWidth
+              />
+              <code className={styles.scopePath} title={selectedScopePath}>{selectedScopePath}</code>
+            </div>
+          )}
+        </div>
+
+        <div className={styles.content}>
+          {tab === "runtime" && (
+            runtimeLoading ? (
+                <LoadingSettings />
+              ) : runtimeError && !runtime ? (
+                <Notice
+                  tone="danger"
+                  title="Runtime settings could not be loaded"
+                  actions={<Button size="compact" onClick={() => void loadRuntime()}>Retry</Button>}
+                >
+                  {runtimeError}
+                </Notice>
+              ) : runtime ? (
                 <>
-                  <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--bg-panel)", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.55 }}>
-                    <div>Global: <code>{runtime.scopes.global.path}</code></div>
-                    <div>Project: <code>{runtime.scopes.project.path}</code> · {runtime.projectTrusted ? "trusted" : runtime.scopes.project.blockedReason}</div>
-                    <div>Trust source: <code>{runtime.projectTrustSource}</code></div>
+                  <div className={styles.summary}>
+                    <div className={styles.summaryItem}>
+                      <span className={styles.summaryLabel}>Active scope</span>
+                      <span className={styles.summaryValue}><code>{scope}</code></span>
+                    </div>
+                    <div className={styles.summaryItem}>
+                      <span className={styles.summaryLabel}>Write access</span>
+                      <span className={styles.summaryValue}>{selectedScopeWritable ? "Available" : "Blocked"}</span>
+                    </div>
+                    <div className={styles.summaryItem}>
+                      <span className={styles.summaryLabel}>Project trust</span>
+                      <span className={styles.summaryValue}>
+                        {runtime.projectTrusted ? "Trusted" : "Not trusted"} · <code>{runtime.projectTrustSource}</code>
+                      </span>
+                    </div>
                   </div>
-                  {runtimeMessage && <div style={{ color: "var(--success)", fontSize: 12 }}>{runtimeMessage}</div>}
-                  {runtime.settings.map((setting) => {
-                    const globalKey = draftKey(setting.key, "global");
-                    const projectKey = draftKey(setting.key, "project");
-                    return (
-                      <section key={setting.key} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, background: "var(--bg-panel)", display: "grid", gap: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ color: "var(--text)", fontWeight: 650, fontSize: 13 }}>{setting.label}</div>
-                            <div style={{ color: "var(--text-muted)", fontSize: 12, lineHeight: 1.45 }}>{setting.description}</div>
-                            <code style={{ color: "var(--text-dim)", fontSize: 11 }}>{setting.key}</code>
+
+                  {projectBlocked && (
+                    <Notice
+                      tone="warning"
+                      title="Project settings are locked"
+                      actions={onOpenProjectTrust ? (
+                        <Button size="compact" onClick={() => requestAction(onOpenProjectTrust)}>Open trust</Button>
+                      ) : undefined}
+                    >
+                      {runtime.scopes.project.blockedReason ?? "Trust this project before editing project-local settings."}
+                    </Notice>
+                  )}
+                  {runtimeError && !runtimeFeedbackKey && <Notice tone="danger" title="Runtime settings error">{runtimeError}</Notice>}
+
+                  {groupedSettings.length > 0 ? (
+                    <div className={styles.runtimeGroups}>
+                      {groupedSettings.map((group) => (
+                        <section className={styles.settingsGroup} key={group.id}>
+                          <div className={styles.groupHeading}>
+                            <h3 className={styles.groupTitle}>{group.label}</h3>
+                            <span className={styles.groupCount}>
+                              {group.settings.length} {group.settings.length === 1 ? "setting" : "settings"}
+                            </span>
                           </div>
-                          <span style={{ border: `1px solid ${applyBadgeColor(setting.applies)}`, color: applyBadgeColor(setting.applies), borderRadius: 999, padding: "2px 7px", fontSize: 10, whiteSpace: "nowrap" }}>{appliesText(setting.applies)}</span>
-                        </div>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", color: "var(--text-muted)", fontSize: 12 }}>
-                          <span>effective: <strong style={{ color: "var(--text)" }}>{formatValue(setting.effectiveValue)}</strong></span>
-                          <span>source: <code>{setting.effectiveScope}</code></span>
-                          <span>default: <code>{formatValue(setting.defaultValue)}</code></span>
-                        </div>
-                        <SettingControl setting={setting} scope="global" value={drafts[globalKey] ?? ""} saving={savingRuntimeKey === globalKey} onChange={(value) => setDrafts((current) => ({ ...current, [globalKey]: value }))} onSave={() => void patchRuntime(setting, "global")} onReset={() => void patchRuntime(setting, "global", true)} />
-                        {setting.scopes.includes("project") && (
-                          <SettingControl setting={setting} scope="project" value={drafts[projectKey] ?? ""} disabled={setting.projectBlocked || !runtime.scopes.project.writable} saving={savingRuntimeKey === projectKey} onChange={(value) => setDrafts((current) => ({ ...current, [projectKey]: value }))} onSave={() => void patchRuntime(setting, "project")} onReset={() => void patchRuntime(setting, "project", true)} />
-                        )}
-                      </section>
-                    );
-                  })}
+                          <div className={styles.settingsGrid}>
+                            {group.settings.map((setting) => {
+                              const key = draftKey(setting.key, scope);
+                              const value = drafts[key] ?? settingDraftValue(setting, scope);
+                              const dirty = value !== settingDraftValue(setting, scope);
+                              const hasOverride = settingHasOverride(setting, scope);
+                              const saving = savingRuntimeKey === key;
+                              const anotherSettingSaving = savingRuntimeKey !== null && !saving;
+                              const disabled = projectBlocked || !selectedScopeWritable || anotherSettingSaving;
+                              return (
+                                <article className={styles.settingCard} key={setting.key}>
+                                  <div className={styles.cardHeader}>
+                                    <div className={styles.cardCopy}>
+                                      <div className={styles.cardTitle}>{setting.label}</div>
+                                      <div className={styles.cardDescription}>{setting.description}</div>
+                                      <code className={styles.settingKey}>{setting.key}</code>
+                                    </div>
+                                    <div className={styles.cardBadges}>
+                                      <Badge tone={hasOverride ? "accent" : "neutral"}>
+                                        {hasOverride ? "Override" : scope === "project" ? "Inherited" : "Default"}
+                                      </Badge>
+                                      <Badge tone={appliesTone(setting.applies)}>{appliesText(setting.applies)}</Badge>
+                                    </div>
+                                  </div>
+                                  <div className={styles.metaGrid}>
+                                    <div className={styles.metaItem}>
+                                      <span className={styles.metaLabel}>Effective</span>
+                                      <span className={`${styles.metaValue} ${styles.metaValueStrong}`} title={formatValue(setting.effectiveValue)}>
+                                        {formatValue(setting.effectiveValue)}
+                                      </span>
+                                    </div>
+                                    <div className={styles.metaItem}>
+                                      <span className={styles.metaLabel}>Source</span>
+                                      <span className={styles.metaValue}>{setting.effectiveScope}</span>
+                                    </div>
+                                    <div className={styles.metaItem}>
+                                      <span className={styles.metaLabel}>Default</span>
+                                      <span className={styles.metaValue} title={formatValue(setting.defaultValue)}>{formatValue(setting.defaultValue)}</span>
+                                    </div>
+                                  </div>
+                                  <RuntimeSettingEditor
+                                    setting={setting}
+                                    scope={scope}
+                                    value={value}
+                                    disabled={disabled || Boolean(setting.projectBlocked && scope === "project")}
+                                    saving={saving}
+                                    dirty={dirty}
+                                    hasOverride={hasOverride}
+                                    onChange={(next) => {
+                                      setDrafts((current) => ({ ...current, [key]: next }));
+                                      setRuntimeMessage(null);
+                                      setRuntimeError(null);
+                                      setRuntimeFeedbackKey(null);
+                                      setRuntimeUndo(null);
+                                    }}
+                                    onSave={(next) => void patchRuntime(setting, scope, false, next)}
+                                    onReset={() => void patchRuntime(setting, scope, true)}
+                                  />
+                                  {runtimeFeedbackKey === key && runtimeMessage && (
+                                    <Notice
+                                      tone="success"
+                                      title="Setting updated"
+                                      actions={runtimeUndo?.key === key ? (
+                                        <Button size="compact" onClick={undoRuntimeChange}>Undo</Button>
+                                      ) : undefined}
+                                    >
+                                      {runtimeMessage}
+                                    </Notice>
+                                  )}
+                                  {runtimeFeedbackKey === key && runtimeError && (
+                                    <Notice tone="danger" title="Setting was not updated">{runtimeError}</Notice>
+                                  )}
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState title="No settings in this scope" description="Switch scope to view the available runtime settings." />
+                  )}
                 </>
-              )}
-            </>
+              ) : null
           )}
 
           {tab === "app" && (
-            <section style={{ display: "grid", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>Web app display</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>Customize the display name shown in the sidebar, new-session welcome screen, and browser title.</div>
-                <code style={{ fontSize: 11, color: "var(--text-dim)" }}>~/.pi/agent/web-settings.json</code>
+            <section className={styles.appPanel}>
+              <div className={styles.sectionIntro}>
+                <h3 className={styles.sectionTitle}>Web app display</h3>
+                <p className={styles.sectionDescription}>
+                  Customize the name shown in the sidebar, new-session screen, browser title, and installed PWA.
+                </p>
+                <code className={styles.filePath}>~/.pi/agent/web-settings.json</code>
               </div>
-              <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500 }}>App display name</span>
-                <input value={displayName} onChange={(e) => { setDisplayName(e.target.value); setAppError(null); setAppMessage(null); }} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void handleSaveApp(); if (e.key === "Escape") onClose(); }} maxLength={APP_DISPLAY_NAME_MAX_LENGTH * 2} style={{ padding: "8px 10px", background: "var(--bg-panel)", border: `1px solid ${appError || validationError ? "#f87171" : "var(--border)"}`, borderRadius: 6, color: "var(--text)", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" }} />
-              </label>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <span style={{ fontSize: 11, color: validationError ? "#f87171" : "var(--text-dim)" }}>{validationError ?? `${normalizedDisplayName.length}/${APP_DISPLAY_NAME_MAX_LENGTH} characters`}</span>
-                <button type="button" onClick={() => { setDisplayName(DEFAULT_APP_SETTINGS.displayName); setAppError(null); setAppMessage(null); }} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, padding: 0 }}>Reset to default</button>
+              {appMessage && <Notice tone="success" title="Settings saved">{appMessage}</Notice>}
+              {appError && <Notice tone="danger" title="Settings were not saved">{appError}</Notice>}
+              <Field
+                label="App display name"
+                error={validationError}
+                hint={(
+                  <span className={styles.fieldHint}>
+                    <span>Used across pi-web chrome.</span>
+                    <span>{normalizedDisplayName.length}/{APP_DISPLAY_NAME_MAX_LENGTH}</span>
+                  </span>
+                )}
+              >
+                <Input
+                  value={displayName}
+                  onChange={(event) => {
+                    setDisplayName(event.target.value);
+                    setAppError(null);
+                    setAppMessage(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void handleSaveApp();
+                  }}
+                  maxLength={APP_DISPLAY_NAME_MAX_LENGTH * 2}
+                  autoComplete="off"
+                />
+              </Field>
+              <div className={styles.controlActions}>
+                <Button
+                  variant="ghost"
+                  disabled={displayName === DEFAULT_APP_SETTINGS.displayName}
+                  onClick={() => {
+                    setDisplayName(DEFAULT_APP_SETTINGS.displayName);
+                    setAppError(null);
+                    setAppMessage(null);
+                  }}
+                >
+                  Reset to default
+                </Button>
               </div>
-              {appMessage && <div style={{ color: "var(--success)", fontSize: 12 }}>{appMessage}</div>}
-              {appError && <div style={{ color: "#f87171", fontSize: 12 }}>{appError}</div>}
             </section>
           )}
 
           {tab === "integrations" && (
-            <section style={{ display: "grid", gap: 10 }}>
-              <div style={{ color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>Model selection, provider authentication, scoped model cycling, and project trust remain separate focused flows.</div>
-              <button type="button" onClick={onOpenModels} style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-panel)", color: "var(--text)", padding: 12, cursor: "pointer" }}>Models</button>
-              <button type="button" onClick={onOpenScopedModels} style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-panel)", color: "var(--text)", padding: 12, cursor: "pointer" }}>Scoped models</button>
-              <button type="button" onClick={onOpenAuth} style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-panel)", color: "var(--text)", padding: 12, cursor: "pointer" }}>Provider auth</button>
-              <button type="button" onClick={onOpenProjectTrust} style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-panel)", color: "var(--text)", padding: 12, cursor: "pointer" }}>Project trust</button>
+            <section className={styles.appPanel}>
+              <div className={styles.sectionIntro}>
+                <h3 className={styles.sectionTitle}>Focused configuration</h3>
+                <p className={styles.sectionDescription}>
+                  Open each focused editor without combining unrelated settings into one oversized form.
+                </p>
+              </div>
+              <div className={styles.integrationGrid}>
+                {integrationItems.map((item) => (
+                  <button
+                    className={styles.integrationCard}
+                    type="button"
+                    key={item.title}
+                    disabled={!item.action}
+                    onClick={() => { if (item.action) requestAction(item.action); }}
+                  >
+                    <span>
+                      <span className={styles.integrationTitle}>{item.title}</span>
+                      <span className={styles.integrationDescription}>{item.description}</span>
+                    </span>
+                    <svg className={styles.integrationArrow} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                      <polyline points="13 6 19 12 13 18" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
             </section>
           )}
         </div>
+      </Dialog>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, padding: "10px 18px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-          {tab === "runtime" && runtimeError && <span style={{ fontSize: 12, color: "#f87171", flex: 1 }}>{runtimeError}</span>}
-          {tab === "app" && <button type="button" onClick={handleSaveApp} disabled={savingApp || Boolean(validationError) || !appChanged} style={{ padding: "6px 14px", background: appChanged && !validationError ? "var(--accent)" : "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 6, color: appChanged && !validationError ? "white" : "var(--text-muted)", cursor: savingApp || validationError || !appChanged ? "default" : "pointer", fontSize: 13, opacity: savingApp ? 0.7 : 1 }}>{savingApp ? "Saving…" : "Save app settings"}</button>}
-          <button type="button" onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>Close</button>
-        </div>
-      </div>
-    </div>
+      <Dialog
+        open={discardOpen}
+        onOpenChange={(nextOpen) => { if (!nextOpen) closeDiscardDialog(); }}
+        title="Discard unsaved changes?"
+        description="Your edited values have not been saved."
+        variant="sheet"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="ghost" onClick={closeDiscardDialog}>Keep editing</Button>
+            <Button variant="danger" onClick={confirmDiscard}>Discard changes</Button>
+          </>
+        )}
+      >
+        <Notice tone="warning" title="Unsaved settings">
+          {appChanged && runtimeDirty
+            ? "The web app and runtime sections both contain unsaved changes."
+            : appChanged
+              ? "The web app section contains an unsaved display name."
+              : "One or more runtime settings contain unapplied values."}
+        </Notice>
+      </Dialog>
+    </>
   );
 }

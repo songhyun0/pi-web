@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import type { SessionInfo } from "@/lib/types";
-import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { FileExplorer } from "./FileExplorer";
+import { DEFAULT_APP_DISPLAY_NAME } from "@/lib/app-settings";
+import {
+  readMobileSessionProject,
+  withMobileSessionProject,
+  withoutMobileSessionProject,
+} from "@/lib/mobile-workspace";
+import type { SessionInfo } from "@/lib/types";
 import { DirectoryPickerModal } from "./DirectoryPickerModal";
+import { FileExplorer } from "./FileExplorer";
+import styles from "./SessionSidebar.module.css";
+import { Button, cx, IconButton, Input, SegmentedControl, Skeleton } from "./ui";
 
 interface Props {
   appName?: string;
@@ -129,7 +136,7 @@ function groupSessionsByProject(sessions: SessionInfo[]): ProjectSessionGroup[] 
 
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
 function displayCwd(cwd: string, homeDir?: string): string {
-  return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
+  return homeDir && cwd.startsWith(homeDir) ? `~${cwd.slice(homeDir.length)}` : cwd;
 }
 
 /**
@@ -139,22 +146,10 @@ function displayCwd(cwd: string, homeDir?: string): string {
  * to the left edge; the inner plaintext bidi isolation keeps the path itself
  * rendered strictly left-to-right (no punctuation reordering).
  */
-function PathLabel({ text, style }: { text: string; style?: CSSProperties }) {
+function PathLabel({ text, className }: { text: string; className?: string }) {
   return (
-    <span
-      style={{
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        display: "block",
-        minWidth: 0,
-        lineHeight: 1.35,
-        direction: "rtl",
-        textAlign: "left",
-        ...style,
-      }}
-    >
-      <span style={{ unicodeBidi: "plaintext" }}>{text}</span>
+    <span className={cx(styles.pathLabel, className)}>
+      <span className={styles.pathLabelText}>{text}</span>
     </span>
   );
 }
@@ -186,7 +181,7 @@ function isInteractiveSwipeTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("button,input,textarea,select,a,[role='button']"));
 }
 
-function AnimatedDropdown({ open, children, style }: { open: boolean; children: ReactNode; style: CSSProperties }) {
+function AnimatedDropdown({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(open);
 
@@ -214,16 +209,7 @@ function AnimatedDropdown({ open, children, style }: { open: boolean; children: 
   if (!mounted) return null;
 
   return (
-    <div
-      style={{
-        ...style,
-        opacity: visible ? 1 : 0,
-        transform: visible ? "translateY(0) scale(1)" : "translateY(-8px) scale(0.96)",
-        transformOrigin: "top center",
-        transition: `opacity ${DROPDOWN_ANIMATION_MS}ms ease, transform ${DROPDOWN_ANIMATION_MS}ms ease`,
-        pointerEvents: open ? "auto" : "none",
-      }}
-    >
+    <div className={cx(styles.dropdown, className)} data-visible={visible && open || undefined}>
       {children}
     </div>
   );
@@ -265,7 +251,8 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
   for (const node of byId.values()) {
     const ancestor = resolveAncestor(node.session.id);
     if (ancestor) {
-      byId.get(ancestor)!.children.push(node);
+      const parent = byId.get(ancestor);
+      if (parent) parent.children.push(node);
     } else {
       roots.push(node);
     }
@@ -274,7 +261,7 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
   // Sort each level by modified desc
   const sort = (nodes: SessionTreeNode[]) => {
     nodes.sort((a, b) => b.session.modified.localeCompare(a.session.modified));
-    nodes.forEach((n) => sort(n.children));
+    nodes.forEach((node) => { sort(node.children); });
   };
   sort(roots);
   return roots;
@@ -354,20 +341,11 @@ function PiAgentTitle({ appName }: { appName: string }) {
 
   return (
     <button
+      type="button"
       onClick={handleClick}
       title={showVersion ? "Show app name" : "Show versions"}
-      style={{
-        background: "none", border: "none", padding: 0, cursor: "default",
-        fontWeight: 700, fontSize: 15, letterSpacing: "-0.01em",
-        color: showVersion ? "var(--accent)" : "var(--text)",
-        fontFamily: "var(--font-mono)",
-        minWidth: 0,
-        flex: "1 1 auto",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        textAlign: "left",
-      }}
+      className={styles.titleButton}
+      data-version={showVersion || undefined}
     >
       {display}
     </button>
@@ -417,6 +395,7 @@ export function SessionSidebar({
   const wtDropdownRef = useRef<HTMLDivElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
   const [explorerOpen, setExplorerOpen] = useState(true);
+  const [mobileMode, setMobileMode] = useState<"sessions" | "explorer">("sessions");
   const [explorerKey, setExplorerKey] = useState(0);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
@@ -433,11 +412,60 @@ export function SessionSidebar({
     directoryPickerOpenRef.current = directoryPickerOpen;
   }, [directoryPickerOpen]);
 
+  useEffect(() => {
+    if (isMobile && mobileMode === "explorer" && !selectedCwd && !selectedCwdProp) setMobileMode("sessions");
+  }, [isMobile, mobileMode, selectedCwd, selectedCwdProp]);
+
+  const applyMobileProjectState = useCallback((projectRoot: string | null) => {
+    if (projectRoot) {
+      setAllProjectsMode(false);
+      setSelectedCwd(projectRoot);
+    } else {
+      setAllProjectsMode(true);
+    }
+  }, []);
+
+  const openProject = useCallback((projectRoot: string, targetMode: "sessions" | "explorer" = "sessions") => {
+    if (isMobile && targetMode === "sessions") {
+      const currentProject = readMobileSessionProject(window.history.state);
+      const nextState = withMobileSessionProject(window.history.state, projectRoot);
+      if (currentProject) window.history.replaceState(nextState, "", window.location.href);
+      else window.history.pushState(nextState, "", window.location.href);
+    } else if (isMobile) {
+      window.history.replaceState(withoutMobileSessionProject(window.history.state), "", window.location.href);
+    }
+    setAllProjectsMode(false);
+    setSelectedCwd(projectRoot);
+    setMobileMode(targetMode);
+  }, [isMobile]);
+
+  const showProjectIndex = useCallback(() => {
+    if (isMobile && readMobileSessionProject(window.history.state)) {
+      window.history.back();
+      return;
+    }
+    if (isMobile) {
+      window.history.replaceState(withoutMobileSessionProject(window.history.state), "", window.location.href);
+    }
+    setAllProjectsMode(true);
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const syncProject = () => applyMobileProjectState(readMobileSessionProject(window.history.state));
+    syncProject();
+    window.addEventListener("popstate", syncProject);
+    return () => window.removeEventListener("popstate", syncProject);
+  }, [applyMobileProjectState, isMobile]);
+
   const loadSessions = useCallback(async (showLoading = false) => {
     try {
       if (showLoading) setLoading(true);
       const res = await fetch("/api/sessions");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: unknown } | null;
+        throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${res.status}`);
+      }
       const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
       setAllSessions(data.sessions);
       // Treat the fetched running set as an initial fallback only. Once SSE is
@@ -466,6 +494,7 @@ export function SessionSidebar({
   }, []);
 
   const initialLoadDone = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally requests a fresh server snapshot.
   useEffect(() => {
     const isFirst = !initialLoadDone.current;
     initialLoadDone.current = true;
@@ -507,8 +536,8 @@ export function SessionSidebar({
     if (completedInBackground.length > 0 || newlyRunning.length > 0) {
       setUnreadSessionIds((prev) => {
         const next = new Set(prev);
-        newlyRunning.forEach((id) => next.delete(id));
-        completedInBackground.forEach((id) => next.add(id));
+        newlyRunning.forEach((id) => { next.delete(id); });
+        completedInBackground.forEach((id) => { next.add(id); });
         return next;
       });
     }
@@ -572,6 +601,7 @@ export function SessionSidebar({
 
   // Load worktrees for the current effective cwd
   const [wtRefreshKey, setWtRefreshKey] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh keys intentionally re-run worktree discovery.
   useLayoutEffect(() => {
     if (!selectedCwd) {
       setWorktreeState(null);
@@ -630,20 +660,38 @@ export function SessionSidebar({
   }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
 
   const startNewSessionInCwd = useCallback((cwd: string) => {
-    // Generate a temporary UUID client-side — no backend call needed.
-    // Pi will be spawned lazily when the user sends the first message.
-    const tempId = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    setAllProjectsMode(false);
-    setSelectedCwd(cwd);
-    setNewSessionPickMode(false);
-    setDropdownOpen(false);
-    setProjectFilter("");
-    setDirectoryPickerOpen(false);
-    setCustomPathError(null);
-    onNewSession?.(tempId, cwd);
-  }, [onNewSession]);
+    const start = () => {
+      // Generate a temporary UUID client-side — no backend call needed.
+      // Pi will be spawned lazily when the user sends the first message.
+      const tempId = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+      setAllProjectsMode(false);
+      setSelectedCwd(cwd);
+      setNewSessionPickMode(false);
+      setDropdownOpen(false);
+      setProjectFilter("");
+      setDirectoryPickerOpen(false);
+      setCustomPathError(null);
+      onNewSession?.(tempId, cwd);
+    };
+
+    if (isMobile && readMobileSessionProject(window.history.state)) {
+      let completed = false;
+      const finishAfterPop = () => {
+        if (completed) return;
+        completed = true;
+        window.removeEventListener("popstate", finishAfterPop);
+        start();
+      };
+      window.addEventListener("popstate", finishAfterPop, { once: true });
+      window.history.back();
+      window.setTimeout(finishAfterPop, 250);
+      return;
+    }
+
+    start();
+  }, [isMobile, onNewSession]);
 
   const commitCustomPath = useCallback(async (path: string) => {
     const trimmedPath = path.trim();
@@ -714,6 +762,7 @@ export function SessionSidebar({
         setWtError(data.error ?? `HTTP ${res.status}`);
         return;
       }
+      const createdPath = data.path;
       setWtNewOpen(false);
       setWtNewBranch("");
       setWtDropdownOpen(false);
@@ -722,10 +771,10 @@ export function SessionSidebar({
       // treating the new cwd as a different project).
       setWorktreeState((prev) => prev ? {
         ...prev,
-        forCwd: data.path!,
-        worktrees: [...prev.worktrees, { path: data.path!, branch, isMain: false }],
+        forCwd: createdPath,
+        worktrees: [...prev.worktrees, { path: createdPath, branch, isMain: false }],
       } : prev);
-      setSelectedCwd(data.path);
+      setSelectedCwd(createdPath);
       setWtRefreshKey((k) => k + 1);
     } catch (e) {
       setWtError(e instanceof Error ? e.message : String(e));
@@ -790,10 +839,28 @@ export function SessionSidebar({
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
-  const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
-    if (s.cwd) setSelectedCwd(s.cwd);
-    onSelectSession(s);
-  }, [onSelectSession]);
+  const handleSelectSessionFromList = useCallback((session: SessionInfo) => {
+    const select = () => {
+      if (session.cwd) setSelectedCwd(session.cwd);
+      onSelectSession(session);
+    };
+
+    if (isMobile && readMobileSessionProject(window.history.state)) {
+      let completed = false;
+      const finishAfterPop = () => {
+        if (completed) return;
+        completed = true;
+        window.removeEventListener("popstate", finishAfterPop);
+        select();
+      };
+      window.addEventListener("popstate", finishAfterPop, { once: true });
+      window.history.back();
+      window.setTimeout(finishAfterPop, 250);
+      return;
+    }
+
+    select();
+  }, [isMobile, onSelectSession]);
 
   const handleNewSession = useCallback(() => {
     setNewSessionPickMode(true);
@@ -847,750 +914,339 @@ export function SessionSidebar({
   const sessionTree = buildSessionTree(filteredSessions);
   const groupedSessionTrees = allProjectsMode ? groupSessionsByProject(filteredSessions) : [];
 
+  const currentWorktree = showWorktreeSwitcher && worktreeState
+    ? worktreeState.worktrees.find((worktree) => worktree.path === selectedCwd) ?? worktreeState.worktrees.find((worktree) => worktree.isMain)
+    : null;
+  const selectedProjectLabel = selectedProject ? displayCwd(selectedProject, homeDir) : "Projects";
+  const showMobileProjects = isMobile && allProjectsMode;
+  const sessionResultCount = showMobileProjects ? groupedSessionTrees.length : filteredSessions.length;
+  const explorerCwd = selectedCwd ?? selectedCwdProp ?? null;
+  const projectTriggerLabel = isMobile && mobileMode === "explorer" && explorerCwd
+    ? displayCwd(projectRootFor(explorerCwd) ?? explorerCwd, homeDir)
+    : allProjectsMode
+      ? ALL_PROJECTS_LABEL
+      : selectedCwd
+        ? displayCwd(selectedProject ?? selectedCwd, homeDir)
+        : initialSessionId && !restoredRef.current
+          ? "Restoring session…"
+          : "Choose project";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Header */}
-      <div
-        style={{
-          padding: "12px 10px 10px",
-          borderBottom: "1px solid var(--border)",
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+    <div className={styles.root} data-mobile-mode={mobileMode}>
+      <header className={styles.header}>
+        <div className={styles.topRow}>
           <PiAgentTitle appName={appName} />
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
+          <div className={styles.headerActions}>
+            <Button
+              size={isMobile ? "touch" : "compact"}
+              variant="primary"
+              className={styles.newButton}
+              leadingIcon={
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="1" x2="6" y2="11" /><line x1="1" y1="6" x2="11" y2="6" /></svg>
+              }
               onClick={handleNewSession}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                background: newSessionPickMode ? "var(--bg-selected)" : "var(--bg-hover)",
-                border: `1px solid ${newSessionPickMode ? "rgba(37,99,235,0.35)" : "var(--border)"}`,
-                color: newSessionPickMode ? "var(--accent)" : "var(--text-muted)",
-                cursor: "pointer",
-                height: 32,
-                paddingLeft: 10,
-                paddingRight: 12,
-                borderRadius: 7,
-                fontSize: 12,
-                fontWeight: 500,
-                letterSpacing: "-0.01em",
-                flexShrink: 0,
-                transition: "background 0.12s, color 0.12s, border-color 0.12s",
-              }}
-              title="Choose a directory for a new session"
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--bg-selected)";
-                e.currentTarget.style.color = "var(--accent)";
-                e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = newSessionPickMode ? "var(--bg-selected)" : "var(--bg-hover)";
-                e.currentTarget.style.color = newSessionPickMode ? "var(--accent)" : "var(--text-muted)";
-                e.currentTarget.style.borderColor = newSessionPickMode ? "rgba(37,99,235,0.35)" : "var(--border)";
-              }}
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                <line x1="6" y1="1" x2="6" y2="11" />
-                <line x1="1" y1="6" x2="11" y2="6" />
-              </svg>
               New
-            </button>
-            <button
+            </Button>
+            <IconButton
+              label={sessionRefreshDone ? "Sessions refreshed" : "Refresh sessions"}
+              size={isMobile ? "touch" : "compact"}
+              className={styles.headerIcon}
+              data-complete={sessionRefreshDone || undefined}
               onClick={() => loadSessions(false)}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: sessionRefreshDone ? "rgba(74,222,128,0.18)" : "var(--bg-hover)",
-                border: `1px solid ${sessionRefreshDone ? "rgba(74,222,128,0.4)" : "var(--border)"}`,
-                color: sessionRefreshDone ? "#4ade80" : "var(--text-muted)",
-                cursor: "pointer",
-                width: 32, height: 32,
-                borderRadius: 7,
-                padding: 0,
-                flexShrink: 0,
-                transition: "background 0.3s, color 0.3s, border-color 0.3s",
-              }}
-              onMouseEnter={(e) => {
-                if (sessionRefreshDone) return;
-                e.currentTarget.style.background = "var(--bg-selected)";
-                e.currentTarget.style.color = "var(--accent)";
-                e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-              }}
-              onMouseLeave={(e) => {
-                if (sessionRefreshDone) return;
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = "var(--text-muted)";
-                e.currentTarget.style.borderColor = "var(--border)";
-              }}
-              title="Refresh"
             >
               {sessionRefreshDone ? (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
               ) : (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                </svg>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
               )}
-            </button>
+            </IconButton>
             {onRequestClose && (
-              <button
-                type="button"
-                onClick={onRequestClose}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  background: "var(--bg-hover)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  width: 32, height: 32,
-                  borderRadius: 7,
-                  padding: 0,
-                  flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                  e.currentTarget.style.color = "var(--accent)";
-                  e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
-                }}
-                title="Close sidebar"
-                aria-label="Close sidebar"
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
+              <IconButton label="Close workspace navigator" size={isMobile ? "touch" : "compact"} className={styles.headerIcon} onClick={onRequestClose}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
+              </IconButton>
             )}
           </div>
         </div>
 
-        {/* CWD picker */}
-        <div ref={dropdownRef} style={{ position: "relative" }}>
+        <div className={styles.mobileModes}>
+          <SegmentedControl
+            value={mobileMode}
+            label="Workspace navigator mode"
+            fullWidth
+            options={[
+              { value: "sessions", label: "Sessions" },
+              { value: "explorer", label: "Explorer", disabled: !selectedCwd && !selectedCwdProp },
+            ]}
+            onValueChange={(value) => setMobileMode(value as "sessions" | "explorer")}
+          />
+        </div>
+
+        <div className={styles.projectArea} ref={dropdownRef}>
           <button
+            type="button"
+            className={styles.pickerTrigger}
+            data-empty={!selectedCwd || undefined}
+            title={selectedProject ?? selectedCwd ?? "Choose project"}
+            aria-expanded={dropdownOpen}
             onClick={() => {
               setNewSessionPickMode(false);
-              setDropdownOpen((v) => !v);
-            }}
-            title={selectedProject ?? selectedCwd ?? ""}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              padding: "6px 10px",
-              background: selectedCwd ? "var(--bg-hover)" : "rgba(37,99,235,0.06)",
-              border: selectedCwd ? "1px solid var(--border)" : "1px solid rgba(37,99,235,0.4)",
-              borderRadius: 7,
-              cursor: "pointer",
-              fontSize: 12,
-              color: "var(--text)",
-              textAlign: "left",
-              transition: "border-color 0.15s, background 0.15s",
+              setDropdownOpen((open) => !open);
             }}
           >
-            {allProjectsMode ? (
-              <span
-                style={{
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text)",
-                }}
-              >
-                {ALL_PROJECTS_LABEL}
-              </span>
-            ) : selectedCwd ? (
-              <PathLabel
-                text={displayCwd(selectedProject ?? selectedCwd, homeDir)}
-                style={{
-                  flex: 1,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text)",
-                }}
-              />
-            ) : (
-              <span
-                style={{
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text-dim)",
-                }}
-              >
-                {initialSessionId && !restoredRef.current ? "" : "Select project…"}
-              </span>
-            )}
+            <span className={styles.triggerIcon}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+            </span>
+            <PathLabel text={projectTriggerLabel} />
+            <svg className={styles.chevron} data-open={dropdownOpen || undefined} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="2 3.5 5 6.5 8 3.5" /></svg>
           </button>
 
-          <AnimatedDropdown
-            open={dropdownOpen}
-            style={{
-              position: "absolute",
-              top: "calc(100% + 4px)",
-              left: 0,
-              right: 0,
-              zIndex: 100,
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              boxShadow: "0 6px 20px rgba(0,0,0,0.10)",
-              overflow: "hidden",
-            }}
-          >
-              {newSessionPickMode && (
-                <div style={{ padding: "7px 10px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>
-                  Choose directory for new session
-                </div>
-              )}
-              {showProjectFilter && (
-                <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
-                  <input
-                    value={projectFilter}
-                    onChange={(e) => setProjectFilter(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setProjectFilter("");
-                        setDropdownOpen(false);
-                      }
-                    }}
-                    placeholder="Filter projects…"
-                    autoFocus
-                    style={{
-                      width: "100%",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                      padding: "5px 8px",
-                      border: "1px solid var(--border)",
-                      borderRadius: 5,
-                      outline: "none",
-                      background: "var(--bg)",
-                      color: "var(--text)",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                </div>
-              )}
-              <div style={{ maxHeight: "min(50vh, 380px)", overflowY: "auto" }}>
-                {!newSessionPickMode && (
-                  <button
-                    onClick={() => {
-                      setAllProjectsMode(true);
+          <AnimatedDropdown open={dropdownOpen}>
+            {newSessionPickMode && <div className={styles.dropdownHeader}>Choose a directory for the new session</div>}
+            {showProjectFilter && (
+              <div className={styles.filterWrap}>
+                <Input
+                  className={styles.projectFilter}
+                  value={projectFilter}
+                  onChange={(event) => setProjectFilter(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
                       setProjectFilter("");
-                      setDirectoryPickerOpen(false);
-                      setCustomPathError(null);
                       setDropdownOpen(false);
-                    }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      width: "100%",
-                      padding: "8px 10px",
-                      background: allProjectsMode ? "var(--bg-hover)" : "var(--bg)",
-                      border: "none",
-                      borderBottom: "1px solid var(--border)",
-                      color: allProjectsMode ? "var(--text)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                    }}
-                    title="Show sessions from every project"
-                  >
-                    {allProjectsMode ? (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                      </svg>
-                    ) : (
-                      <span style={{ width: 10, flexShrink: 0 }} />
-                    )}
-                    <span style={{ flex: 1 }}>{ALL_PROJECTS_LABEL}</span>
-                  </button>
-                )}
-                {visibleProjects.map((project) => (
+                    }
+                  }}
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects"
+                  autoFocus
+                />
+              </div>
+            )}
+            <div className={styles.dropdownScroll}>
+              {!newSessionPickMode && (
+                <button
+                  type="button"
+                  className={styles.dropdownOption}
+                  data-selected={allProjectsMode && mobileMode === "sessions" || undefined}
+                  onClick={() => {
+                    showProjectIndex();
+                    setProjectFilter("");
+                    setDirectoryPickerOpen(false);
+                    setCustomPathError(null);
+                    setDropdownOpen(false);
+                    setMobileMode("sessions");
+                  }}
+                >
+                  <span className={styles.checkSlot}>{allProjectsMode && mobileMode === "sessions" && <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}</span>
+                  <span>{ALL_PROJECTS_LABEL}</span>
+                </button>
+              )}
+              {visibleProjects.map((project) => {
+                const selected = project === selectedProject && (!allProjectsMode || mobileMode === "explorer");
+                return (
                   <button
+                    type="button"
                     key={project}
+                    className={styles.dropdownOption}
+                    data-selected={selected || undefined}
+                    title={project}
                     onClick={() => {
                       if (newSessionPickMode) {
                         startNewSessionInCwd(project);
                         return;
                       }
-                      setAllProjectsMode(false);
-                      setSelectedCwd(project);
+                      openProject(project, mobileMode);
                       setProjectFilter("");
                       setDirectoryPickerOpen(false);
                       setCustomPathError(null);
                       setDropdownOpen(false);
                     }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      width: "100%",
-                      padding: "8px 10px",
-                      background: "var(--bg)",
-                      border: "none",
-                      borderBottom: "1px solid var(--border)",
-                      color: !allProjectsMode && project === selectedProject ? "var(--text)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={project}
                   >
-                    {!allProjectsMode && project === selectedProject && (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                      </svg>
-                    )}
-                    {(allProjectsMode || project !== selectedProject) && <span style={{ width: 10, flexShrink: 0 }} />}
-                    <PathLabel text={displayCwd(project, homeDir)} style={{ flex: 1 }} />
+                    <span className={styles.checkSlot}>{selected && <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}</span>
+                    <PathLabel text={displayCwd(project, homeDir)} />
                   </button>
-                ))}
-                {visibleProjects.length === 0 && projectFilter.trim() && (
-                  <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-dim)" }}>No matching projects</div>
-                )}
-              </div>
-
-              {/* Default cwd shortcut */}
-              <button
-                onClick={(e) => { e.stopPropagation(); handleDefaultCwd(); }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  width: "100%",
-                  padding: "8px 10px",
-                  background: "none",
-                  border: "none",
-                  borderTop: visibleProjects.length > 0 ? "1px solid var(--border)" : "none",
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontSize: 11,
-                }}
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                  <path d="M1 3A1 1 0 0 1 2 2H4L5 3.5H8.5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8V3Z" />
-                </svg>
+                );
+              })}
+              {visibleProjects.length === 0 && projectFilter.trim() && <div className={styles.dropdownEmpty}>No matching projects</div>}
+            </div>
+            <div className={styles.dropdownFooter}>
+              <button type="button" className={styles.dropdownOption} onClick={(event) => { event.stopPropagation(); void handleDefaultCwd(); }}>
+                <span className={styles.checkSlot}>
+                  <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2l1 1.5h3.5A.5.5 0 0 1 9 4v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8Z" /></svg>
+                </span>
                 <span>Use default directory</span>
               </button>
-
-              {/* Custom path picker */}
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
+                type="button"
+                className={styles.dropdownOption}
+                onClick={(event) => {
+                  event.stopPropagation();
                   setCustomPathError(null);
                   setDropdownOpen(false);
                   setDirectoryPickerOpen(true);
                 }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  width: "100%",
-                  padding: "8px 10px",
-                  background: "none",
-                  border: "none",
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontSize: 11,
-                }}
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                  <path d="M1 3A1 1 0 0 1 2 2H4L5 3.5H8.5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8V3Z" />
-                  <path d="M5 5.2v2.2M3.9 6.3h2.2" />
-                </svg>
+                <span className={styles.checkSlot}>
+                  <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2l1 1.5h3.5A.5.5 0 0 1 9 4v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8Z" /><path d="M5 5.2v2.2M3.9 6.3h2.2" /></svg>
+                </span>
                 <span>Browse custom directory…</span>
               </button>
+            </div>
           </AnimatedDropdown>
         </div>
 
-        {/* Worktree switcher — shown only for git projects at a checkout top
-            level (repo subdirs keep their own project identity, so switching
-            from them would jump projects). Rendered whenever the selected cwd
-            belongs to the loaded project (not just when forCwd matches), so
-            switching between worktrees of one project keeps the row mounted
-            instead of flickering while data refetches: all worktrees of a
-            project share the same list anyway. */}
-        {showWorktreeSwitcher && (() => {
-          if (!worktreeState) return null;
-          const currentWt = worktreeState.worktrees.find((w) => w.path === selectedCwd)
-            ?? worktreeState.worktrees.find((w) => w.isMain);
-          return (
-            <div ref={wtDropdownRef} style={{ position: "relative", marginTop: 6 }}>
-              <button
-                onClick={() => setWtDropdownOpen((v) => !v)}
-                title={currentWt ? `Switch worktree: ${currentWt.path}` : "Switch worktree"}
-                style={{
-                  width: "100%",
-                  height: 29,
-                  boxSizing: "border-box",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "0 10px",
-                  background: "var(--bg-hover)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 7,
-                  cursor: "pointer",
-                  fontSize: 11,
-                  lineHeight: 1.35,
-                  color: "var(--text-muted)",
-                  textAlign: "left",
-                }}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, color: currentWt && !currentWt.isMain ? "var(--accent)" : "var(--text-dim)" }}>
-                  <line x1="6" y1="3" x2="6" y2="15" />
-                  <circle cx="18" cy="6" r="3" />
-                  <circle cx="6" cy="18" r="3" />
-                  <path d="M18 9a9 9 0 0 1-9 9" />
-                </svg>
-                <PathLabel
-                  text={currentWt ? (currentWt.branch ?? displayCwd(currentWt.path, homeDir)) : "…"}
-                  style={{ flex: 1, fontFamily: "var(--font-mono)", color: "var(--text)" }}
-                />
-                {currentWt?.isMain && (
-                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>main</span>
-                )}
-                {worktreeState.worktrees.length > 1 && (
-                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>
-                    {worktreeState.worktrees.length}
-                  </span>
-                )}
-                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                  <polyline points="2 3.5 5 6.5 8 3.5" />
-                </svg>
-              </button>
+        {showWorktreeSwitcher && worktreeState && (
+          <div className={styles.worktreeArea} ref={wtDropdownRef}>
+            <button type="button" className={styles.worktreeTrigger} title={currentWorktree ? `Switch worktree: ${currentWorktree.path}` : "Switch worktree"} aria-expanded={wtDropdownOpen} onClick={() => setWtDropdownOpen((open) => !open)}>
+              <span className={styles.triggerIcon} data-active={currentWorktree && !currentWorktree.isMain || undefined}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+              </span>
+              <PathLabel text={currentWorktree ? currentWorktree.branch ?? displayCwd(currentWorktree.path, homeDir) : "Loading worktree…"} />
+              {worktreeState.worktrees.length > 1 && <span className={styles.triggerMeta}>{worktreeState.worktrees.length}</span>}
+              <svg className={styles.chevron} data-open={wtDropdownOpen || undefined} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="2 3.5 5 6.5 8 3.5" /></svg>
+            </button>
 
-              <AnimatedDropdown
-                open={wtDropdownOpen}
-                style={{
-                  position: "absolute",
-                  top: "calc(100% + 4px)",
-                  left: 0,
-                  right: 0,
-                  zIndex: 100,
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  boxShadow: "0 6px 20px rgba(0,0,0,0.10)",
-                  overflow: "hidden",
-                }}
-              >
-                  <div style={{ maxHeight: "min(40vh, 300px)", overflowY: "auto" }}>
-                    {worktreeState.worktrees.map((wt) => {
-                      const isCurrent = wt.path === selectedCwd || (wt.isMain && !worktreeState.worktrees.some((w) => w.path === selectedCwd));
-                      if (wtConfirmRemove === wt.path) {
-                        return (
-                          <div key={wt.path} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderBottom: "1px solid var(--border)", background: "rgba(239,68,68,0.06)" }}>
-                            <span style={{ flex: 1, fontSize: 11, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              Uncommitted changes. Force remove checkout?
-                            </span>
-                            <button
-                              onClick={() => void handleRemoveWorktree(wt.path, true)}
-                              disabled={wtBusy}
-                              style={{ padding: "3px 9px", background: "#ef4444", border: "none", borderRadius: 5, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
-                            >
-                              Force
-                            </button>
-                            <button
-                              onClick={() => setWtConfirmRemove(null)}
-                              style={{ padding: "3px 9px", background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", fontSize: 11, cursor: "pointer", flexShrink: 0 }}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div
-                          key={wt.path}
-                          className="wt-row"
-                          style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--border)" }}
-                        >
-                          <button
-                            onClick={() => {
-                              setSelectedCwd(wt.path);
-                              setWtDropdownOpen(false);
-                              setWtError(null);
-                            }}
-                            title={wt.path}
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 7,
-                              padding: "8px 10px",
-                              background: "var(--bg)",
-                              border: "none",
-                              color: isCurrent ? "var(--text)" : "var(--text-muted)",
-                              cursor: "pointer",
-                              textAlign: "left",
-                              fontSize: 11,
-                              fontFamily: "var(--font-mono)",
-                            }}
-                          >
-                            {isCurrent ? (
-                              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                                <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                              </svg>
-                            ) : (
-                              <span style={{ width: 10, flexShrink: 0 }} />
-                            )}
-                            <PathLabel text={wt.branch ?? displayCwd(wt.path, homeDir)} style={{ flex: 1 }} />
-                            {wt.isMain && <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>main</span>}
-                          </button>
-                          {!wt.isMain && (
-                            <button
-                              onClick={() => void handleRemoveWorktree(wt.path, false)}
-                              disabled={wtBusy}
-                              title={`Remove worktree checkout ${wt.path}; the branch is kept`}
-                              style={{
-                                display: "flex", alignItems: "center", justifyContent: "center",
-                                width: 34, height: 28, padding: 0, marginRight: 4,
-                                background: "none", border: "none",
-                                color: "var(--text-dim)", cursor: "pointer",
-                                borderRadius: 5, flexShrink: 0,
-                                transition: "color 0.12s, background 0.12s",
-                              }}
-                              onMouseEnter={(e) => { e.currentTarget.style.color = "#ef4444"; e.currentTarget.style.background = "rgba(239,68,68,0.08)"; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
-                            >
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                <path d="M10 11v6M14 11v6" />
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                              </svg>
-                            </button>
-                          )}
+            <AnimatedDropdown open={wtDropdownOpen} className={styles.worktreeDropdown}>
+              <div className={styles.dropdownScroll}>
+                {worktreeState.worktrees.map((worktree) => {
+                  const current = worktree.path === selectedCwd || worktree.isMain && !worktreeState.worktrees.some((candidate) => candidate.path === selectedCwd);
+                  if (wtConfirmRemove === worktree.path) {
+                    return (
+                      <div key={worktree.path} className={styles.worktreeConfirm}>
+                        <p>Uncommitted changes were found. Force-remove this checkout? The branch is kept.</p>
+                        <div className={styles.worktreeConfirmActions}>
+                          <Button variant="danger" size="compact" loading={wtBusy} onClick={() => void handleRemoveWorktree(worktree.path, true)}>Force remove</Button>
+                          <Button size="compact" onClick={() => setWtConfirmRemove(null)}>Cancel</Button>
                         </div>
-                      );
-                    })}
-                  </div>
-
-                  {!wtNewOpen ? (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setWtNewOpen(true);
-                        setWtError(null);
-                        setTimeout(() => wtNewInputRef.current?.focus(), 0);
-                      }}
-                      title="Create a worktree checkout for a branch"
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 7,
-                        width: "100%",
-                        padding: "8px 10px",
-                        background: "none",
-                        border: "none",
-                        color: "var(--text-muted)",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontSize: 11,
-                      }}
-                    >
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" style={{ flexShrink: 0 }}>
-                        <line x1="5" y1="1" x2="5" y2="9" />
-                        <line x1="1" y1="5" x2="9" y2="5" />
-                      </svg>
-                      <span>New worktree…</span>
-                    </button>
-                  ) : (
-                    <div style={{ padding: "6px 8px" }}>
-                      <input
-                        ref={wtNewInputRef}
-                        value={wtNewBranch}
-                        onChange={(e) => {
-                          setWtNewBranch(e.target.value);
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={worktree.path} className={styles.worktreeRow}>
+                      <button
+                        type="button"
+                        className={styles.dropdownOption}
+                        data-selected={current || undefined}
+                        title={worktree.path}
+                        onClick={() => {
+                          setSelectedCwd(worktree.path);
+                          setWtDropdownOpen(false);
                           setWtError(null);
                         }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void handleCreateWorktree();
-                          }
-                          if (e.key === "Escape") {
-                            setWtNewOpen(false);
-                            setWtNewBranch("");
-                            setWtError(null);
-                          }
-                        }}
-                        placeholder="branch name"
-                        style={{
-                          width: "100%",
-                          fontSize: 11,
-                          fontFamily: "var(--font-mono)",
-                          padding: "5px 8px",
-                          border: "1px solid var(--accent)",
-                          borderRadius: 5,
-                          outline: "none",
-                          background: "var(--bg)",
-                          color: "var(--text)",
-                          boxSizing: "border-box",
-                        }}
-                      />
-                      <div style={{ display: "flex", gap: 5, marginTop: 5 }}>
-                        <button
-                          onClick={() => void handleCreateWorktree()}
-                          disabled={wtBusy || !wtNewBranch.trim()}
-                          style={{
-                            flex: 1,
-                            padding: "4px 0",
-                            background: "var(--accent)",
-                            border: "none",
-                            borderRadius: 5,
-                            color: "#fff",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            cursor: wtBusy || !wtNewBranch.trim() ? "not-allowed" : "pointer",
-                            opacity: wtBusy || !wtNewBranch.trim() ? 0.65 : 1,
-                          }}
-                        >
-                          {wtBusy ? "Creating…" : "Create"}
-                        </button>
-                        <button
-                          onClick={() => { setWtNewOpen(false); setWtNewBranch(""); setWtError(null); }}
-                          style={{
-                            flex: 1,
-                            padding: "4px 0",
-                            background: "var(--bg-hover)",
-                            border: "1px solid var(--border)",
-                            borderRadius: 5,
-                            color: "var(--text-muted)",
-                            fontSize: 11,
-                            cursor: "pointer",
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                      >
+                        <span className={styles.checkSlot}>{current && <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}</span>
+                        <PathLabel text={worktree.branch ?? displayCwd(worktree.path, homeDir)} />
+                        {worktree.isMain && <span className={styles.triggerMeta}>main</span>}
+                      </button>
+                      {!worktree.isMain && (
+                        <IconButton label={`Remove worktree ${worktree.branch ?? worktree.path}`} size={isMobile ? "touch" : "compact"} className={styles.worktreeRemove} disabled={wtBusy} onClick={() => void handleRemoveWorktree(worktree.path, false)}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6" /><path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+                        </IconButton>
+                      )}
                     </div>
-                  )}
-                  {wtError && (
-                    <div style={{
-                      padding: "5px 10px 8px",
-                      color: "#dc2626",
-                      fontSize: 11,
-                      lineHeight: 1.35,
-                      overflowWrap: "anywhere",
-                    }}>
-                      {wtError}
-                    </div>
-                  )}
-              </AnimatedDropdown>
-            </div>
-          );
-        })()}
-        {inactiveWorktreeSelector && (
-          <button
-            type="button"
-            aria-disabled="true"
-            tabIndex={-1}
-            title={inactiveWorktreeSelector.title}
-            style={{
-              width: "100%",
-              height: 29,
-              boxSizing: "border-box",
-              marginTop: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 10px",
-              border: "1px solid var(--border)",
-              borderRadius: 7,
-              background: "var(--bg-hover)",
-              color: "var(--text-dim)",
-              fontSize: 11,
-              lineHeight: 1.35,
-              whiteSpace: "nowrap",
-              textAlign: "left",
-              cursor: "default",
-              opacity: 0.82,
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{inactiveWorktreeSelector.label}</span>
-          </button>
+                  );
+                })}
+              </div>
+              {!wtNewOpen ? (
+                <button type="button" className={styles.dropdownOption} onClick={(event) => { event.stopPropagation(); setWtNewOpen(true); setWtError(null); setTimeout(() => wtNewInputRef.current?.focus(), 0); }}>
+                  <span className={styles.checkSlot}>
+                    <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true"><line x1="5" y1="1" x2="5" y2="9" /><line x1="1" y1="5" x2="9" y2="5" /></svg>
+                  </span>
+                  <span>New worktree…</span>
+                </button>
+              ) : (
+                <div className={styles.worktreeNew}>
+                  <Input
+                    ref={wtNewInputRef}
+                    className="pi-control--mono"
+                    value={wtNewBranch}
+                    onChange={(event) => { setWtNewBranch(event.target.value); setWtError(null); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { event.preventDefault(); void handleCreateWorktree(); }
+                      if (event.key === "Escape") { setWtNewOpen(false); setWtNewBranch(""); setWtError(null); }
+                    }}
+                    placeholder="branch name"
+                    aria-label="New worktree branch"
+                  />
+                  <div className={styles.worktreeNewActions}>
+                    <Button variant="primary" size="compact" loading={wtBusy} disabled={!wtNewBranch.trim()} onClick={() => void handleCreateWorktree()}>Create</Button>
+                    <Button size="compact" onClick={() => { setWtNewOpen(false); setWtNewBranch(""); setWtError(null); }}>Cancel</Button>
+                  </div>
+                </div>
+              )}
+              {wtError && <div className={styles.worktreeError} role="alert">{wtError}</div>}
+            </AnimatedDropdown>
+          </div>
         )}
-      </div>
+        {inactiveWorktreeSelector && (
+          <div className={styles.worktreeGuide} title={inactiveWorktreeSelector.title}>
+            <span className={styles.triggerIcon}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+            </span>
+            <span>{inactiveWorktreeSelector.label}</span>
+          </div>
+        )}
+      </header>
 
-      {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      <section className={styles.sessionList} role={showMobileProjects ? "region" : "tree"} aria-label="Sessions">
+        <div className={styles.mobileSessionHeader}>
+          {!allProjectsMode && (
+            <IconButton
+              label="Back to projects"
+              size="compact"
+              className={styles.mobileBack}
+              onClick={() => { showProjectIndex(); setDropdownOpen(false); }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
+            </IconButton>
+          )}
+          <h2>{allProjectsMode ? "Projects" : selectedProjectLabel}</h2>
+          <span className={styles.mobileSessionCount}>{sessionResultCount}</span>
+        </div>
+
         {loading && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
-            Loading...
+          <div className={styles.state}>
+            <div className={styles.stateSkeleton}><Skeleton height={52} /><Skeleton height={52} /><Skeleton height={52} /></div>
           </div>
         )}
         {error && (
-          <div style={{ padding: "12px 14px", color: "#f87171", fontSize: 12 }}>
-            {error}
+          <div className={styles.state} data-tone="danger" role="alert">
+            <strong>Could not load sessions.</strong>
+            <span className={styles.stateDetail}>{error}</span>
+            <Button size={isMobile ? "touch" : "compact"} onClick={() => loadSessions(true)}>Retry</Button>
           </div>
         )}
-        {!loading && !error && filteredSessions.length === 0 && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
-            No sessions found
+        {!loading && !error && sessionResultCount === 0 && (
+          <div className={styles.state}>
+            <strong>{showMobileProjects ? "No projects yet" : "No sessions in this project"}</strong>
+            <span>{showMobileProjects ? "Start a session to add the first project." : "Start a clean session in the selected directory."}</span>
+            <Button variant="primary" size={isMobile ? "touch" : "compact"} onClick={handleNewSession}>New session</Button>
           </div>
         )}
-        {allProjectsMode ? groupedSessionTrees.map((group) => (
-          <div key={group.projectRoot}>
-            <button
-              type="button"
-              onClick={() => {
-                setAllProjectsMode(false);
-                setSelectedCwd(group.projectRoot);
-              }}
-              title={`Focus ${group.projectRoot}`}
-              style={{
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "7px 10px 6px",
-                background: "var(--bg)",
-                border: "none",
-                borderTop: "1px solid var(--border)",
-                borderBottom: "1px solid var(--border)",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                textAlign: "left",
-                fontSize: 10,
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              <PathLabel text={displayCwd(group.projectRoot, homeDir)} style={{ flex: 1, fontWeight: 700, color: "var(--text)" }} />
-              <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
-                {group.sessions.length}
-              </span>
+
+        {showMobileProjects && !loading && !error && (
+          <div className={styles.projectList}>
+            {groupedSessionTrees.map((group) => (
+              <button
+                type="button"
+                key={group.projectRoot}
+                className={styles.projectCard}
+                onClick={() => openProject(group.projectRoot)}
+              >
+                <span className={styles.projectCardCopy}>
+                  <PathLabel text={displayCwd(group.projectRoot, homeDir)} className={styles.projectCardPath} />
+                  <span className={styles.projectCardMeta}>Updated {formatRelativeTime(group.latestModified)}</span>
+                </span>
+                <span className={styles.projectCardCount}>{group.sessions.length}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {!isMobile && allProjectsMode && groupedSessionTrees.map((group) => (
+          <div key={group.projectRoot} className={styles.projectGroup}>
+            <button type="button" className={styles.projectHeading} title={`Focus ${group.projectRoot}`} onClick={() => openProject(group.projectRoot)}>
+              <PathLabel text={displayCwd(group.projectRoot, homeDir)} />
+              <span className={styles.projectHeadingCount}>{group.sessions.length}</span>
             </button>
             {group.tree.map((node) => (
               <SessionTreeItem
@@ -1602,15 +1258,13 @@ export function SessionSidebar({
                 isMobile={isMobile}
                 onSelectSession={handleSelectSessionFromList}
                 onRenamed={loadSessions}
-                onSessionDeleted={(id) => {
-                  onSessionDeleted?.(id);
-                  loadSessions();
-                }}
+                onSessionDeleted={(id) => { onSessionDeleted?.(id); void loadSessions(); }}
                 depth={0}
               />
             ))}
           </div>
-        )) : sessionTree.map((node) => (
+        ))}
+        {!allProjectsMode && !loading && !error && sessionTree.map((node) => (
           <SessionTreeItem
             key={node.session.id}
             node={node}
@@ -1620,116 +1274,62 @@ export function SessionSidebar({
             isMobile={isMobile}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
-            onSessionDeleted={(id) => {
-              onSessionDeleted?.(id);
-              loadSessions();
-            }}
+            onSessionDeleted={(id) => { onSessionDeleted?.(id); void loadSessions(); }}
             depth={0}
           />
         ))}
-      </div>
+      </section>
 
-      {/* File Explorer section */}
-      {(selectedCwdProp || selectedCwd) && (
-        <div
-          style={{
-            borderTop: "1px solid var(--border)",
-            display: "flex",
-            flexDirection: "column",
-            flex: explorerOpen ? "1 1 0" : "0 0 auto",
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            <button
-              onClick={() => setExplorerOpen((v) => !v)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                flex: 1,
-                padding: "6px 10px",
-                background: "none",
-                border: "none",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: "0.05em",
-                textTransform: "uppercase",
-                textAlign: "left",
-              }}
-            >
-              <svg
-                width="9" height="9" viewBox="0 0 10 10" fill="none"
-                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: explorerOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
-              >
-                <polyline points="3 2 7 5 3 8" />
-              </svg>
+      {explorerCwd && (
+        <section className={styles.explorerSection} data-open={isMobile || explorerOpen} aria-label="File explorer">
+          <div className={styles.explorerHeader}>
+            <button type="button" className={styles.explorerToggle} onClick={() => { if (!isMobile) setExplorerOpen((open) => !open); }} aria-expanded={isMobile || explorerOpen}>
+              {!isMobile && (
+                <svg className={styles.explorerChevron} data-open={explorerOpen || undefined} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 2 7 5 3 8" /></svg>
+              )}
               Explorer
             </button>
-            <button
+            <IconButton
+              label={explorerRefreshDone ? "Explorer refreshed" : "Refresh explorer"}
+              size={isMobile ? "touch" : "compact"}
+              className={styles.explorerRefresh}
+              data-complete={explorerRefreshDone || undefined}
               onClick={() => {
-                setExplorerKey((k) => k + 1);
+                setExplorerKey((key) => key + 1);
                 setExplorerRefreshDone(true);
                 if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
                 explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
               }}
-              title="Refresh explorer"
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                width: 26, height: 26, padding: 0, marginRight: 6,
-                background: explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none",
-                border: "none",
-                color: explorerRefreshDone ? "#4ade80" : "var(--text-dim)",
-                cursor: "pointer",
-                borderRadius: 5,
-                flexShrink: 0,
-                transition: "color 0.3s, background 0.3s",
-              }}
-              onMouseEnter={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
             >
               {explorerRefreshDone ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
               ) : (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                </svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
               )}
-            </button>
+            </IconButton>
           </div>
-          {explorerOpen && (
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+          {(isMobile || explorerOpen) && (
+            <div className={styles.explorerBody}>
               <FileExplorer
-                cwd={selectedCwd ?? selectedCwdProp!}
+                cwd={explorerCwd}
                 onOpenFile={onOpenFile ?? (() => {})}
                 refreshKey={explorerKey}
                 onAtMention={onAtMention}
               />
             </div>
           )}
-        </div>
+        </section>
       )}
       {directoryPickerOpen && (
         <DirectoryPickerModal
           initialPath={selectedCwd ?? selectedCwdProp ?? homeDir}
           homeDir={homeDir}
           title={newSessionPickMode ? "Choose new session directory" : "Choose project directory"}
-          subtitle={newSessionPickMode ? "Browse folders and start a new session in the selected directory." : "Browse folders and switch the sidebar to the selected project directory."}
+          subtitle={newSessionPickMode ? "Browse folders and start a new session in the selected directory." : "Browse folders and switch the navigator to the selected project directory."}
           selectLabel={newSessionPickMode ? "Start session here" : "Open this directory"}
           busy={customPathValidating}
           error={customPathError}
-          onClose={() => {
-            setDirectoryPickerOpen(false);
-            setNewSessionPickMode(false);
-            setCustomPathError(null);
-          }}
+          onClose={() => { setDirectoryPickerOpen(false); setNewSessionPickMode(false); setCustomPathError(null); }}
           onSelect={commitCustomPath}
         />
       )}
@@ -1762,116 +1362,60 @@ function SessionTreeItem({
   const hasChildren = node.children.length > 0;
 
   return (
-    <div>
-      <div style={{ position: "relative" }}>
-        {/* Indent line for child sessions */}
-        {depth > 0 && (
-          <div style={{
-            position: "absolute",
-            left: depth * 12 + 6,
-            top: 0, bottom: 0,
-            width: 1,
-            background: "var(--border)",
-            pointerEvents: "none",
-          }} />
-        )}
-        <SessionItem
-          session={node.session}
-          isSelected={node.session.id === selectedSessionId}
-          isRunning={runningSessionIds.has(node.session.id)}
-          isUnread={unreadSessionIds.has(node.session.id)}
+    <div className={styles.treeNode} style={{ "--tree-depth": depth } as CSSProperties}>
+      {depth > 0 && <div className={styles.indentLine} aria-hidden="true" />}
+      <SessionItem
+        session={node.session}
+        isSelected={node.session.id === selectedSessionId}
+        isRunning={runningSessionIds.has(node.session.id)}
+        isUnread={unreadSessionIds.has(node.session.id)}
+        isMobile={isMobile}
+        onClick={() => onSelectSession(node.session)}
+        onRenamed={onRenamed}
+        onDeleted={(id) => onSessionDeleted?.(id)}
+        depth={depth}
+        hasChildren={hasChildren}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((value) => !value)}
+      />
+      {hasChildren && !collapsed && node.children.map((child) => (
+        <SessionTreeItem
+          key={child.session.id}
+          node={child}
+          selectedSessionId={selectedSessionId}
+          runningSessionIds={runningSessionIds}
+          unreadSessionIds={unreadSessionIds}
           isMobile={isMobile}
-          onClick={() => onSelectSession(node.session)}
+          onSelectSession={onSelectSession}
           onRenamed={onRenamed}
-          onDeleted={(id) => onSessionDeleted?.(id)}
-          depth={depth}
-          hasChildren={hasChildren}
-          collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((v) => !v)}
+          onSessionDeleted={onSessionDeleted}
+          depth={depth + 1}
         />
-      </div>
-      {hasChildren && !collapsed && (
-        <div>
-          {node.children.map((child) => (
-            <SessionTreeItem
-              key={child.session.id}
-              node={child}
-              selectedSessionId={selectedSessionId}
-              runningSessionIds={runningSessionIds}
-              unreadSessionIds={unreadSessionIds}
-              isMobile={isMobile}
-              onSelectSession={onSelectSession}
-              onRenamed={onRenamed}
-              onSessionDeleted={onSessionDeleted}
-              depth={depth + 1}
-            />
-          ))}
-        </div>
-      )}
+      ))}
     </div>
   );
 }
 
 function RunningSessionIndicator() {
   return (
-    <span
-      title="Agent running…"
-      aria-label="Agent running"
-      style={{
-        width: 14,
-        height: 14,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        color: "var(--accent)",
-      }}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ display: "block" }}>
-        <g>
-          <path
-            d="M21 12a9 9 0 1 1-3.8-7.4"
-            stroke="currentColor"
-            strokeWidth="2.8"
-            strokeLinecap="round"
-          />
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 12 12"
-            to="360 12 12"
-            dur="0.9s"
-            repeatCount="indefinite"
-          />
+    <output className={styles.indicator} title="Agent running…" aria-label="Agent running">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <g className={styles.runningSpinner}>
+          <path d="M21 12a9 9 0 1 1-3.8-7.4" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" />
         </g>
       </svg>
-    </span>
+    </output>
   );
 }
 
 function UnreadSessionIndicator() {
   return (
-    <span
-      title="New activity"
-      aria-label="New session activity"
-      style={{
-        width: 14,
-        height: 14,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        color: "#0891b2",
-      }}
-    >
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={{ display: "block" }}>
+    <output className={`${styles.indicator} ${styles.unreadPulse}`} title="New activity" aria-label="New session activity">
+      <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <circle cx="7" cy="7" r="2.5" fill="currentColor" />
-        <circle cx="7" cy="7" r="3" stroke="currentColor" strokeWidth="1.4" opacity="0.32">
-          <animate attributeName="r" values="3;6;3" dur="1.6s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.32;0;0.32" dur="1.6s" repeatCount="indefinite" />
-        </circle>
+        <circle className={styles.unreadPulseRing} cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.4" />
       </svg>
-    </span>
+    </output>
   );
 }
 
@@ -1902,7 +1446,7 @@ function SessionItem({
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1946,14 +1490,8 @@ function SessionItem({
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
     if (isMobile) return;
-    setHovered(false);
+    setMobileActionsOpen(false);
     closeSwipe();
   }, [isMobile, closeSwipe]);
 
@@ -1968,12 +1506,16 @@ function SessionItem({
   }, [isMobile, session.id, closeSwipe]);
 
   useEffect(() => {
-    if (isSelected || confirmDelete || renaming || deleting) closeSwipe();
+    if (isSelected || confirmDelete || renaming || deleting) {
+      closeSwipe();
+      setMobileActionsOpen(false);
+    }
   }, [isSelected, confirmDelete, renaming, deleting, closeSwipe]);
 
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     closeSwipe();
+    setMobileActionsOpen(false);
     setRenameValue(session.name ?? "");
     setRenaming(true);
     setTimeout(() => inputRef.current?.select(), 0);
@@ -1998,6 +1540,7 @@ function SessionItem({
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     closeSwipe();
+    setMobileActionsOpen(false);
     setConfirmDelete(true);
   }, [closeSwipe]);
 
@@ -2025,6 +1568,11 @@ function SessionItem({
       clearSwipeClickSuppression();
       return;
     }
+    if (mobileActionsOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (isMobile && swipeOpen) {
       e.preventDefault();
       e.stopPropagation();
@@ -2032,10 +1580,10 @@ function SessionItem({
       return;
     }
     onClick();
-  }, [clearSwipeClickSuppression, closeSwipe, isMobile, onClick, swipeOpen]);
+  }, [clearSwipeClickSuppression, closeSwipe, isMobile, mobileActionsOpen, onClick, swipeOpen]);
 
   const handlePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!isMobile || confirmDelete || renaming || deleting) return;
+    if (!isMobile || confirmDelete || renaming || deleting || mobileActionsOpen) return;
     if (e.button !== 0 || isInteractiveSwipeTarget(e.target)) return;
 
     swipeRef.current = {
@@ -2047,7 +1595,7 @@ function SessionItem({
       moved: false,
     };
     setSwipeDragging(true);
-  }, [confirmDelete, deleting, isMobile, renaming, swipeOpen]);
+  }, [confirmDelete, deleting, isMobile, mobileActionsOpen, renaming, swipeOpen]);
 
   const handlePointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     const gesture = swipeRef.current;
@@ -2115,284 +1663,121 @@ function SessionItem({
     finishSwipe(e, true);
   }, [finishSwipe]);
 
-  // Fixed-height outer wrapper — content swaps in place so the list never reflows
-  const ITEM_HEIGHT = 54;
-  const rowBackground = confirmDelete
-    ? "rgba(239,68,68,0.06)"
-    : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent";
-  const rowBorderLeft = confirmDelete
-    ? "2px solid #ef4444"
-    : isSelected ? "2px solid var(--accent)" : "2px solid transparent";
-
   return (
     <div
-      style={{
-        position: "relative",
-        height: ITEM_HEIGHT,
-        overflow: "hidden",
-        opacity: deleting ? 0.5 : 1,
-      }}
+      className={styles.sessionItem}
+      data-deleting={deleting || undefined}
+      style={{ "--swipe-offset": isMobile ? `${swipeOffset}px` : "0px" } as CSSProperties}
     >
-      {isMobile && !confirmDelete && !renaming && (
+      {isMobile && !confirmDelete && !renaming && !mobileActionsOpen && (
         <button
           type="button"
+          className={styles.swipeDelete}
+          data-visible={swipeOffset > 8 || undefined}
           aria-label={`Delete ${title}`}
-          title="Delete"
           onClick={handleDeleteClick}
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            bottom: 0,
-            width: SESSION_SWIPE_ACTION_WIDTH,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 2,
-            border: "none",
-            background: "#ef4444",
-            color: "#fff",
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: "pointer",
-            opacity: swipeOffset > 4 ? 1 : 0,
-            pointerEvents: swipeOffset > 8 ? "auto" : "none",
-            transition: swipeDragging ? "none" : "opacity 0.16s ease",
-          }}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-            <path d="M10 11v6M14 11v6" />
-            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6" /><path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
           Delete
         </button>
       )}
       <div
+        className={styles.sessionRow}
+        data-selected={isSelected || undefined}
+        data-confirm={confirmDelete || undefined}
+        data-dragging={swipeDragging || undefined}
+        role="treeitem"
+        aria-selected={isSelected}
+        tabIndex={!confirmDelete && !renaming && !deleting && !mobileActionsOpen ? 0 : -1}
+        aria-disabled={confirmDelete || renaming || deleting || mobileActionsOpen || undefined}
+        aria-label={`Open ${title}`}
         onClick={confirmDelete || renaming || deleting ? undefined : handleRowClick}
+        onKeyDown={(event) => {
+          if ((event.key === "Enter" || event.key === " ") && !confirmDelete && !renaming && !deleting && !mobileActionsOpen) {
+            event.preventDefault();
+            onClick();
+          }
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        onMouseEnter={() => { if (!isMobile) setHovered(true); }}
-        onMouseLeave={() => { setHovered(false); }}
-        style={{
-          position: "relative",
-          zIndex: 1,
-          width: "100%",
-          height: ITEM_HEIGHT,
-          display: "flex",
-          alignItems: "center",
-          paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
-          paddingRight: 8,
-          cursor: confirmDelete || renaming || deleting ? "default" : "pointer",
-          background: rowBackground,
-          borderLeft: rowBorderLeft,
-          transition: swipeDragging ? "background 0.1s" : "transform 0.16s ease, background 0.1s",
-          transform: isMobile ? `translateX(-${swipeOffset}px)` : undefined,
-          touchAction: isMobile ? "pan-y" : undefined,
-          gap: 6,
-          overflow: "hidden",
-          willChange: isMobile ? "transform" : undefined,
-        }}
       >
         {confirmDelete ? (
-          /* ── Delete confirmation: same height, two flat buttons ── */
           <>
-            <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              Delete <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</span>?
-            </div>
-            <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-              <button
-                onClick={handleDeleteConfirm}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                  height: 30, padding: "0 11px",
-                  background: "#ef4444", border: "none",
-                  borderRadius: 6, color: "#fff",
-                  cursor: "pointer", fontSize: 12, fontWeight: 600,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                </svg>
-                Delete
-              </button>
-              <button
-                onClick={handleDeleteCancel}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  height: 30, padding: "0 11px",
-                  background: "var(--bg)", border: "1px solid var(--border)",
-                  borderRadius: 6, color: "var(--text-muted)",
-                  cursor: "pointer", fontSize: 12, fontWeight: 500,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Cancel
-              </button>
+            <div className={styles.confirmCopy}>Delete <strong>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</strong>?</div>
+            <div className={styles.confirmActions}>
+              <Button variant="danger" size="compact" onClick={handleDeleteConfirm}>Delete</Button>
+              <Button size="compact" onClick={handleDeleteCancel}>Cancel</Button>
             </div>
           </>
         ) : renaming ? (
-          /* ── Rename: input fills the same row ── */
-          <input
+          <Input
             ref={inputRef}
+            className={styles.renameInput}
             value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitRename();
-              if (e.key === "Escape") setRenaming(false);
+            onChange={(event) => setRenameValue(event.target.value)}
+            onBlur={() => void commitRename()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void commitRename();
+              if (event.key === "Escape") setRenaming(false);
             }}
+            aria-label="Session name"
             autoFocus
-            style={{
-              flex: 1,
-              fontSize: 12,
-              padding: "5px 8px",
-              border: "1px solid var(--accent)",
-              borderRadius: 5,
-              outline: "none",
-              background: "var(--bg)",
-              color: "var(--text)",
-              height: 30,
-            }}
           />
+        ) : mobileActionsOpen ? (
+          <div className={styles.mobileActions}>
+            <span className={styles.mobileActionsTitle}>{title}</span>
+            <Button size="compact" onClick={startRename}>Rename</Button>
+            <Button variant="danger" size="compact" onClick={handleDeleteClick}>Delete</Button>
+            <IconButton label="Cancel session actions" size="compact" onClick={(event) => { event.stopPropagation(); setMobileActionsOpen(false); }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
+            </IconButton>
+          </div>
         ) : (
-          /* ── Normal view ── */
           <>
-            {/* Fork indicator for child sessions */}
             {depth > 0 && (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <line x1="6" y1="3" x2="6" y2="15" />
-                <circle cx="18" cy="6" r="3" />
-                <circle cx="6" cy="18" r="3" />
-                <path d="M18 9a9 9 0 0 1-9 9" />
-              </svg>
+              <svg className={styles.forkIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
             )}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                  minWidth: 0,
-                  fontSize: 12,
-                  fontWeight: isSelected ? 500 : 400,
-                  lineHeight: 1.4,
-                  color: "var(--text)",
-                }}
-                title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
-              >
+            <div className={styles.sessionPrimary}>
+              <div className={styles.sessionTitle} title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}>
                 {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                  {title}
-                </span>
+                <span className={styles.sessionTitleText}>{title}</span>
               </div>
-              <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+              <div className={styles.sessionMeta}>
                 <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
                 <span>{session.messageCount} msgs</span>
                 {session.worktreeBranch && (
-                  <span
-                    title={`Worktree: ${session.cwd}`}
-                    style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--accent)", minWidth: 0, overflow: "hidden" }}
-                  >
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                      <line x1="6" y1="3" x2="6" y2="15" />
-                      <circle cx="18" cy="6" r="3" />
-                      <circle cx="6" cy="18" r="3" />
-                      <path d="M18 9a9 9 0 0 1-9 9" />
-                    </svg>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.worktreeBranch}</span>
+                  <span className={styles.sessionBranch} title={`Worktree: ${session.cwd}`}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+                    <span>{session.worktreeBranch}</span>
                   </span>
                 )}
               </div>
             </div>
-
-            {/* Collapse toggle — always visible when has children */}
             {hasChildren && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
-                title={collapsed ? "Expand forks" : "Collapse forks"}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 20, height: 20, padding: 0, flexShrink: 0,
-                  background: "none", border: "none",
-                  color: "var(--text-dim)", cursor: "pointer",
-                  transform: collapsed ? "rotate(-90deg)" : "none",
-                  transition: "transform 0.15s",
-                }}
+              <IconButton
+                label={collapsed ? "Expand forks" : "Collapse forks"}
+                size="compact"
+                className={styles.collapseButton}
+                data-collapsed={collapsed || undefined}
+                onClick={(event) => { event.stopPropagation(); onToggleCollapse?.(); }}
               >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="2 3.5 5 6.5 8 3.5" />
-                </svg>
-              </button>
+                <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="2 3.5 5 6.5 8 3.5" /></svg>
+              </IconButton>
             )}
-
-            {/* Action buttons — shown on hover */}
-            {hovered && (
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <button
-                  onClick={startRename}
-                  title="Rename"
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 32, height: 32, padding: 0,
-                    background: "var(--bg-hover)", border: "1px solid var(--border)",
-                    borderRadius: 7, color: "var(--text-muted)",
-                    cursor: "pointer", flexShrink: 0,
-                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-selected)";
-                    e.currentTarget.style.color = "var(--accent)";
-                    e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.color = "var(--text-muted)";
-                    e.currentTarget.style.borderColor = "var(--border)";
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleDeleteClick}
-                  title="Delete"
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 32, height: 32, padding: 0,
-                    background: "var(--bg-hover)", border: "1px solid var(--border)",
-                    borderRadius: 7, color: "var(--text-muted)",
-                    cursor: "pointer", flexShrink: 0,
-                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(239,68,68,0.08)";
-                    e.currentTarget.style.color = "#ef4444";
-                    e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.color = "var(--text-muted)";
-                    e.currentTarget.style.borderColor = "var(--border)";
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                    <path d="M10 11v6M14 11v6" />
-                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                  </svg>
-                </button>
-              </div>
+            <div className={styles.sessionActions}>
+              <IconButton label={`Rename ${title}`} size="compact" className={styles.sessionAction} onClick={startRename}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z" /></svg>
+              </IconButton>
+              <IconButton label={`Delete ${title}`} size="compact" className={styles.sessionAction} data-danger="true" onClick={handleDeleteClick}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6" /><path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+              </IconButton>
+            </div>
+            {isMobile && (
+              <IconButton label={`Actions for ${title}`} size="touch" className={styles.mobileMore} onClick={(event) => { event.stopPropagation(); closeSwipe(); setMobileActionsOpen(true); }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+              </IconButton>
             )}
           </>
         )}

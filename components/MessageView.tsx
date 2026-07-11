@@ -1,25 +1,27 @@
+// biome-ignore-all lint/performance/noImgElement: message images use runtime blob/data URLs and preserve intrinsic dimensions.
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
-import { MarkdownBody } from "./MarkdownBody";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { copyText } from "@/lib/clipboard";
-import { formatBashDuration } from "@/lib/user-bash";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { isEmptyThinkingBlock } from "@/lib/message-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
 import type {
   AgentMessage,
-  UserMessage,
-  AssistantMessage,
-  CustomMessage,
-  ToolResultMessage,
-  BashExecutionMessage,
   AssistantContentBlock,
-  TextContent,
+  AssistantMessage,
+  BashExecutionMessage,
+  CustomMessage,
   ImageContent,
-  ToolCallContent,
+  TextContent,
   ThinkingContent,
+  ToolCallContent,
+  ToolResultMessage,
+  UserMessage,
 } from "@/lib/types";
+import { formatBashDuration } from "@/lib/user-bash";
+import { MarkdownBody } from "./MarkdownBody";
+import styles from "./MessageView.module.css";
 
 interface Props {
   message: AgentMessage;
@@ -99,24 +101,26 @@ function BashExecutionMessageView({ message, cwd }: { message: BashExecutionMess
   };
 
   return (
-    <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-start" }}>
-      <div style={{ maxWidth: "86%", minWidth: 0, border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-panel)", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 10px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>$ {message.command}</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
+    <div className={styles.bashMessage}>
+      <div className={styles.bashCard}>
+        <div className={styles.bashHeader}>
+          <div className={styles.bashIdentity}>
+            <div className={styles.bashCommand}>$ {message.command}</div>
+            <div className={styles.bashMeta}>
               <span>{status}</span>
               {duration && <span>{duration}</span>}
               {effectiveCwd && <span title={effectiveCwd}>cwd: {effectiveCwd}</span>}
-              {message.excludeFromContext ? <span>excluded from context (!!)</span> : <span>included in context (!)</span>}
+              <span>{message.excludeFromContext ? "excluded from context (!!)" : "included in context (!)"}</span>
               {message.truncated && <span>truncated</span>}
             </div>
           </div>
-          <button type="button" onClick={copyOutput} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "4px 7px", fontSize: 11, cursor: "pointer", flexShrink: 0 }}>{copied ? "Copied" : "Copy"}</button>
+          <button type="button" onClick={copyOutput} className={styles.action} data-active={copied || undefined}>
+            {copied ? "Copied" : "Copy"}
+          </button>
         </div>
-        <pre style={{ margin: 0, padding: 10, maxHeight: 360, overflow: "auto", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.45, fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{output}</pre>
+        <pre className={styles.bashOutput}>{output}</pre>
         {message.truncated && message.fullOutputPath && (
-          <div style={{ padding: "0 10px 10px", color: "var(--warning)", fontSize: 11 }}>Full output: <code>{message.fullOutputPath}</code></div>
+          <div className={styles.bashWarning}>Full output: <code>{message.fullOutputPath}</code></div>
         )}
       </div>
     </div>
@@ -135,7 +139,6 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   prevAssistantEntryId?: string;
   onEditContent?: (content: string) => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const content =
@@ -163,29 +166,12 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   };
 
   return (
-    <div
-      style={{ marginBottom: 16, display: "flex", flexDirection: "column", alignItems: "flex-end" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "85%" }}>
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            background: "var(--user-bg)",
-            border: "1px solid rgba(59,130,246,0.2)",
-            borderRadius: 12,
-            padding: "8px 12px",
-            fontSize: 14,
-            lineHeight: 1.6,
-            color: "var(--text)",
-            wordBreak: "break-word",
-          }}
-        >
+    <div className={styles.userMessage}>
+      <div className={styles.userRow}>
+        <div className={styles.userBubble}>
           {imageBlocks.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: content ? 8 : 0 }}>
-              {imageBlocks.map((img, i) => {
+            <div className={styles.imageGrid} data-has-text={Boolean(content) || undefined}>
+              {imageBlocks.map((img) => {
                 // lib/types.ts ImageContent uses {source:{type,data,media_type,url}}
                 // pi-ai on-disk format uses flat {data, mimeType} — handle both
                 const flat = img as unknown as { data?: string; mimeType?: string };
@@ -199,10 +185,10 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                 return (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    key={i}
+                    key={src}
                     src={src}
                     alt=""
-                    style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid rgba(59,130,246,0.15)" }}
+                    className={styles.messageImage}
                   />
                 );
               })}
@@ -213,113 +199,43 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
 
       </div>
 
-      {/* Bottom row: action buttons + timestamp */}
-      {(time || canFork || canNavigate || true) && (
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "flex-end",
-          gap: 6, marginTop: 3,
-        }}>
-          <div style={{
-            display: "flex", gap: 3,
-            opacity: hovered ? 1 : 0,
-            pointerEvents: hovered ? "auto" : "none",
-            transition: "opacity 0.12s",
-          }}>
+      <div className={styles.messageMeta}>
+        <div className={styles.actions}>
+          <button type="button" className={styles.action} data-active={copied || undefined} onClick={copyContent} title="Copy message">
+            {copied ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+            )}
+            {copied ? "Copied" : "Copy"}
+          </button>
+          {canNavigate && prevAssistantEntryId && (
             <button
-              onClick={copyContent}
-              title="Copy message"
-              style={{
-                display: "flex", alignItems: "center", gap: 4,
-                padding: "3px 8px", height: 22,
-                background: "none", border: "none",
-                borderRadius: 5,
-                color: copied ? "var(--accent)" : "var(--text-dim)",
-                cursor: "pointer",
-                fontSize: 11, fontWeight: 400,
-                whiteSpace: "nowrap",
-                transition: "color 0.12s",
-              }}
-              onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-              onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+              type="button"
+              className={styles.action}
+              onClick={() => { onNavigate?.(prevAssistantEntryId); onEditContent?.(content); }}
+              title="Edit from here — branches within this session"
             >
-              {copied ? (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              )}
-              {copied ? "Copied" : "Copy"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20" /><path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg>
+              Edit from here
             </button>
-          </div>
-          {(canFork || canNavigate) && (
-            <div style={{
-              display: "flex", gap: 3,
-              opacity: (hovered || forking) ? 1 : 0,
-              pointerEvents: (hovered || forking) ? "auto" : "none",
-              transition: "opacity 0.12s",
-            }}>
-              {canNavigate && (
-                <button
-                  onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(content); }}
-                  title="Edit from here — branches within this session"
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "3px 8px", height: 22,
-                    background: "none", border: "none",
-                    borderRadius: 5,
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    fontSize: 11, fontWeight: 400,
-                    whiteSpace: "nowrap",
-                    transition: "color 0.12s",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="15 10 20 15 15 20" />
-                    <path d="M4 4v7a4 4 0 0 0 4 4h12" />
-                  </svg>
-                  Edit from here
-                </button>
-              )}
-              {canFork && (
-                <button
-                  onClick={() => { onFork!(entryId!); }}
-                  disabled={forking}
-                  title={forking ? "Creating new session…" : "New session — creates an independent copy from here"}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "3px 8px", height: 22,
-                    background: "none", border: "none",
-                    borderRadius: 5,
-                    color: forking ? "var(--accent)" : "var(--text-dim)",
-                    cursor: forking ? "not-allowed" : "pointer",
-                    fontSize: 11, fontWeight: 400,
-                    whiteSpace: "nowrap",
-                    transition: "color 0.12s",
-                  }}
-                  onMouseEnter={(e) => { if (!forking) e.currentTarget.style.color = "var(--accent)"; }}
-                  onMouseLeave={(e) => { if (!forking) e.currentTarget.style.color = "var(--text-dim)"; }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="6" y1="3" x2="6" y2="15" />
-                    <circle cx="18" cy="6" r="3" />
-                    <circle cx="6" cy="18" r="3" />
-                    <path d="M18 9a9 9 0 0 1-9 9" />
-                  </svg>
-                  {forking ? "Creating…" : "New session"}
-                </button>
-              )}
-            </div>
           )}
-          {time && <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{time}</span>}
+          {canFork && entryId && (
+            <button
+              type="button"
+              className={styles.action}
+              data-active={forking || undefined}
+              onClick={() => onFork?.(entryId)}
+              disabled={forking}
+              title={forking ? "Forking session…" : "Fork session — creates an independent copy from here"}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+              {forking ? "Forking…" : "Fork"}
+            </button>
+          )}
         </div>
-      )}
+        {time && <span className={styles.timestamp}>{time}</span>}
+      </div>
     </div>
   );
 }
@@ -348,7 +264,6 @@ function AssistantMessageView({
     .map((block, originalIndex) => ({ block, originalIndex }))
     .filter(({ block }) => !isEmptyThinkingBlock(block, { isStreaming }));
   const blocks = blockItems.map(({ block }) => block);
-  const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
   const streamStartRef = useRef<number | null>(null);
   const [tps, setTps] = useState<number | null>(null);
@@ -397,6 +312,7 @@ function AssistantMessageView({
   useEffect(() => {
     if (!isStreaming) {
       // Finalise any un-finished thinking block durations on stream end
+      // biome-ignore lint/complexity/useDateNow: capture one stable end time inside the effect.
       const now = new Date().getTime();
       setStreamingDurations((prev: Map<number, number>) => {
         const next = new Map(prev);
@@ -427,7 +343,8 @@ function AssistantMessageView({
           const originalIndex = items[i].originalIndex;
           const nextOriginalIndex = items[i + 1].originalIndex;
           if (!next.has(originalIndex) && blockStartTimesRef.current.has(originalIndex)) {
-            const start = blockStartTimesRef.current.get(originalIndex)!;
+            const start = blockStartTimesRef.current.get(originalIndex);
+            if (start === undefined) continue;
             const nextStart = blockStartTimesRef.current.get(nextOriginalIndex) ?? now;
             next.set(originalIndex, Math.round((nextStart - start) / 1000));
             changed = true;
@@ -454,24 +371,11 @@ function AssistantMessageView({
   if (blocks.length === 0 && !isStreaming) return null;
 
   return (
-    <div
-      style={{ marginBottom: 16 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div className={styles.assistantMessage}>
       {/* Model label */}
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--text-dim)",
-          marginBottom: 4,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
+      <div className={styles.assistantHeader}>
         {message.provider && (
-          <span>{modelNames?.[`${message.provider}:${message.model}`] ?? modelNames?.[message.model] ?? message.model}</span>
+          <span className={styles.assistantName}>{modelNames?.[`${message.provider}:${message.model}`] ?? modelNames?.[message.model] ?? message.model}</span>
         )}
         {isStreaming && (() => {
           let chars = 0;
@@ -485,21 +389,14 @@ function AssistantMessageView({
             <>
 
               {est > 0 && (
-                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--text)" }} title="Estimated token count while streaming">
-                  <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, fontWeight: 400 }}>
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                <span className={styles.streamingStats} title="Estimated token count while streaming">
+                  <span className={styles.streamingTokens}>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
                     </svg>
                     {est}
                   </span>
-                  {tps !== null && (() => {
-                    const bg = tps >= 50 ? "#53b3cb" : tps >= 30 ? "#9bc53d" : tps >= 15 ? "#f9c22e" : "#e01a4f";
-                    return (
-                      <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 4, background: bg, color: "#fff", fontSize: 11, fontWeight: 400 }}>
-                        {tps.toFixed(1)} t/s
-                      </span>
-                    );
-                  })()}
+                  {tps !== null && <span className={styles.speed}>{tps.toFixed(1)} t/s</span>}
                 </span>
               )}
             </>
@@ -507,46 +404,32 @@ function AssistantMessageView({
         })()}
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className={styles.assistantContent}>
         {blockItems.map(({ block, originalIndex }) => (
           <BlockView key={originalIndex} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} />
         ))}
       </div>
 
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, marginTop: 4,
-      }}>
+      <div className={styles.assistantFooter}>
         {message.usage && !isStreaming && (
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          <div className={styles.usage}>
             {formatUsage(message.usage)}
           </div>
         )}
         {textContent && !isStreaming && (
           <button
+            type="button"
             onClick={copyContent}
             title="Copy message"
-            style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 8px", height: 22,
-              background: "none", border: "none",
-              borderRadius: 5,
-              color: copied ? "var(--accent)" : "var(--text-dim)",
-              cursor: "pointer",
-              fontSize: 11, fontWeight: 400,
-              whiteSpace: "nowrap",
-              opacity: hovered ? 1 : 0,
-              pointerEvents: hovered ? "auto" : "none",
-              transition: "opacity 0.12s, color 0.12s",
-            }}
-            onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-            onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+            className={styles.action}
+            data-active={copied || undefined}
           >
             {copied ? (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             ) : (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
@@ -555,7 +438,7 @@ function AssistantMessageView({
           </button>
         )}
         {time && !isStreaming && (
-          <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>{time}</span>
+          <span className={styles.timestamp}>{time}</span>
         )}
       </div>
     </div>
@@ -585,47 +468,20 @@ function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent
 function ThinkingBlock({ block, duration }: { block: ThinkingContent; duration?: number }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div
-      style={{
-        border: "1px solid var(--border)",
-        borderRadius: 6,
-        overflow: "hidden",
-        fontSize: 13,
-      }}
-    >
+    <div className={styles.detailCard}>
       <button
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          width: "100%",
-          padding: "6px 10px",
-          background: "var(--bg-panel)",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-        }}
+        type="button"
+        aria-expanded={expanded}
+        className={styles.detailToggle}
+        onClick={() => setExpanded((value) => !value)}
       >
         <span>Thinking</span>
         {duration !== undefined && (
-          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
+          <span className={styles.detailDuration}>{duration}s</span>
         )}
       </button>
       {expanded && (
-        <div
-          style={{
-            padding: "8px 10px",
-            color: "var(--text-muted)",
-            fontSize: 12,
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            background: "var(--bg-panel)",
-            borderTop: "1px solid var(--border)",
-          }}
-        >
+        <div className={styles.detailBody}>
           {block.thinking}
         </div>
       )}
@@ -648,63 +504,31 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
   const isError = result?.isError ?? false;
 
   return (
-    <div
-      style={{
-        borderRadius: 7,
-        overflow: "hidden",
-        fontSize: 12,
-        border: isError ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(34,197,94,0.25)",
-        background: isError ? "rgba(248,113,113,0.05)" : "rgba(34,197,94,0.04)",
-      }}
-    >
+    <div className={styles.toolCard} data-complete={Boolean(result && !isError) || undefined} data-error={isError || undefined}>
       {/* ── Tool call header ── */}
       <button
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          width: "100%",
-          padding: "6px 10px",
-          background: "none",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-          minWidth: 0,
-        }}
+        type="button"
+        aria-expanded={expanded}
+        className={styles.toolToggle}
+        onClick={() => setExpanded((value) => !value)}
       >
-        <span style={{ color: isError ? "#f87171" : "#16a34a", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 11, flexShrink: 0 }}>
+        <span className={styles.toolName}>
           {block.toolName}
         </span>
-        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+        <span className={styles.toolPreview}>
           {getToolPreview(block)}
         </span>
         {duration !== undefined && (
-          <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
+          <span className={styles.toolDuration}>{duration}s</span>
         )}
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+        <svg className={styles.toolChevron} data-expanded={expanded || undefined} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <polyline points="2 3.5 5 6.5 8 3.5" />
         </svg>
       </button>
 
       {/* ── Expanded: input args ── */}
       {expanded && !isEditTool && (
-        <pre
-          style={{
-            margin: 0,
-            padding: "8px 10px",
-            color: "var(--text-muted)",
-            fontSize: 12,
-            lineHeight: 1.5,
-            overflow: "auto",
-            background: "var(--bg-subtle)",
-            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
+        <pre className={styles.toolInput}>
           {inputStr}
         </pre>
       )}
@@ -735,12 +559,7 @@ function PairedDiffResult({ diff }: {
   diff: ResultDiff;
 }) {
   return (
-    <div
-      style={{
-        borderTop: "1px solid rgba(34,197,94,0.15)",
-        background: "var(--bg)",
-      }}
-    >
+    <div className={styles.toolResult}>
       <SplitPatchView text={diff.text} />
     </div>
   );
@@ -752,43 +571,28 @@ function SplitPatchView({ text }: { text: string }) {
   const showFileHeaders = files.length > 1;
 
   return (
-    <div style={{ maxHeight: 560, overflowY: "auto", overflowX: "hidden", background: "var(--bg)" }}>
+    <div className={styles.diffScroll}>
       {files.map((file, fileIndex) => (
         <div
-          key={fileIndex}
-          style={{
-            minWidth: 0,
-            borderTop: fileIndex === 0 ? "none" : "1px solid var(--border)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            lineHeight: 1.55,
-          }}
+          key={`${file.oldPath}\0${file.newPath}`}
+          className={styles.diffFile}
+          data-first={fileIndex === 0 || undefined}
         >
           {showFileHeaders && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                position: "sticky",
-                top: 0,
-                zIndex: 1,
-                background: "var(--bg-panel)",
-                borderBottom: "1px solid var(--border)",
-              }}
-            >
+            <div className={styles.diffHeaders}>
               <SplitDiffHeader title={file.oldPath || "Before"} side="left" />
               <SplitDiffHeader title={file.newPath || "After"} side="right" />
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
-            {file.rows.map((row, rowIndex) => {
+          <div className={styles.diffGrid}>
+            {file.rows.map((row) => {
               if (row.type === "hunk") {
                 return null;
               }
 
               return (
-                <div key={rowIndex} style={{ display: "contents" }}>
+                <div key={`${row.left.lineNo ?? ""}:${row.right.lineNo ?? ""}:${row.left.text}:${row.right.text}`} className={styles.diffContents}>
                   <SplitDiffCellView cell={row.left} side="left" />
                   <SplitDiffCellView cell={row.right} side="right" />
                 </div>
@@ -805,79 +609,26 @@ function SplitDiffHeader({ title, side }: { title: string; side: "left" | "right
   return (
     <div
       title={title}
-      style={{
-        padding: "5px 10px",
-        color: "var(--text-dim)",
-        borderRight: side === "left" ? "1px solid var(--border)" : "none",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
+      className={styles.diffHeader}
+      data-side={side}
+>
       {title}
     </div>
   );
 }
 
 function SplitDiffCellView({ cell, side }: { cell: SplitDiffCell; side: "left" | "right" }) {
-  const bg =
-    cell.type === "added"
-      ? "rgba(34,197,94,0.12)"
-      : cell.type === "removed"
-      ? "rgba(248,113,113,0.13)"
-      : cell.type === "empty"
-      ? "var(--bg-subtle)"
-      : "transparent";
-  const marker =
-    cell.type === "added" ? "+" : cell.type === "removed" ? "-" : " ";
-  const markerColor =
-    cell.type === "added" ? "#22c55e" : cell.type === "removed" ? "#f87171" : "var(--text-dim)";
+  const marker = cell.type === "added" ? "+" : cell.type === "removed" ? "-" : " ";
 
   return (
-    <div
-      style={{
-        display: "flex",
-        minWidth: 0,
-        background: bg,
-        borderRight: side === "left" ? "1px solid var(--border)" : "none",
-      }}
-    >
-      <span
-        style={{
-          width: 42,
-          padding: "0 6px",
-          textAlign: "right",
-          color: "var(--text-dim)",
-          userSelect: "none",
-          background: "var(--bg-panel)",
-          borderRight: "1px solid var(--border)",
-          flexShrink: 0,
-        }}
-      >
+    <div className={styles.diffCell} data-type={cell.type} data-side={side}>
+      <span className={styles.diffLineNumber}>
         {cell.lineNo ?? ""}
       </span>
-      <span
-        style={{
-          width: 18,
-          padding: "0 5px",
-          color: markerColor,
-          userSelect: "none",
-          fontWeight: cell.type === "context" || cell.type === "empty" ? 400 : 700,
-          flexShrink: 0,
-        }}
-      >
+      <span className={styles.diffMarker}>
         {marker}
       </span>
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          padding: "0 10px 0 0",
-          color: cell.type === "empty" ? "var(--text-dim)" : "var(--text)",
-          whiteSpace: "pre-wrap",
-          overflowWrap: "anywhere",
-        }}
-      >
+      <span className={styles.diffText}>
         {cell.text || "\u00a0"}
       </span>
     </div>
@@ -888,54 +639,21 @@ function PatchTextView({ text }: { text: string }) {
   const lines = text.split(/\r?\n/);
 
   return (
-    <div style={{ maxHeight: 520, overflowY: "auto", overflowX: "hidden", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.55, minWidth: 0 }}>
+    <div className={styles.patch}>
       {lines.map((line, i) => {
         const kind =
           line.startsWith("@@") ? "hunk" :
           line.startsWith("+") && !line.startsWith("+++") ? "added" :
           line.startsWith("-") && !line.startsWith("---") ? "removed" :
           "context";
-        const bg =
-          kind === "added" ? "rgba(34,197,94,0.12)" :
-          kind === "removed" ? "rgba(248,113,113,0.13)" :
-          kind === "hunk" ? "rgba(96,165,250,0.12)" :
-          "transparent";
-        const color =
-          kind === "added" ? "#22c55e" :
-          kind === "removed" ? "#f87171" :
-          kind === "hunk" ? "var(--accent)" :
-          "var(--text)";
 
         return (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              background: bg,
-              borderLeft: kind === "added"
-                ? "3px solid #22c55e"
-                : kind === "removed"
-                ? "3px solid #f87171"
-                : kind === "hunk"
-                ? "3px solid var(--accent)"
-                : "3px solid transparent",
-            }}
-          >
-            <span
-              style={{
-                width: 48,
-                padding: "0 8px",
-                color: "var(--text-dim)",
-                background: "var(--bg-panel)",
-                borderRight: "1px solid var(--border)",
-                textAlign: "right",
-                userSelect: "none",
-                flexShrink: 0,
-              }}
-            >
+          // biome-ignore lint/suspicious/noArrayIndexKey: the line number is the stable identity within a rendered patch.
+          <div key={i} className={styles.patchLine} data-kind={kind}>
+            <span className={styles.patchNumber}>
               {i + 1}
             </span>
-            <span style={{ padding: "0 10px", whiteSpace: "pre-wrap", overflowWrap: "anywhere", color }}>
+            <span className={styles.patchText}>
               {line || "\u00a0"}
             </span>
           </div>
@@ -978,28 +696,8 @@ function PairedResult({ text, isEmpty, isError }: {
   isError: boolean;
 }) {
   return (
-    <div
-      style={{
-        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.15)"}`,
-        background: isError ? "rgba(248,113,113,0.04)" : "var(--bg-subtle)",
-      }}
-    >
-      <pre
-        style={{
-          margin: 0,
-          padding: "8px 10px",
-          color: isError ? "#f87171" : (isEmpty ? "var(--text-dim)" : "var(--text-muted)"),
-          fontSize: 12,
-          lineHeight: 1.5,
-          overflow: "auto",
-          maxHeight: 400,
-          background: "var(--bg)",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          fontStyle: isEmpty ? "italic" : "normal",
-          opacity: isEmpty ? 0.6 : 1,
-        }}
-      >
+    <div className={styles.toolResult}>
+      <pre className={styles.resultOutput} data-error={isError || undefined} data-empty={isEmpty || undefined}>
         {isEmpty ? "(no output)" : text}
       </pre>
     </div>
@@ -1015,54 +713,33 @@ function CompactionMarkerView({ message }: { message: CustomMessage }) {
   const time = formatTime(message.timestamp);
 
   return (
-    <div style={{ margin: "18px 0", display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ height: 1, flex: 1, background: "linear-gradient(to right, transparent, var(--border))" }} />
+    <div className={styles.compaction}>
+      <div className={styles.compactionRule}>
         <button
-          onClick={() => setExpanded((v) => !v)}
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
           title={expanded ? "Hide compaction summary" : "Show compaction summary"}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            padding: "5px 10px",
-            border: "1px solid color-mix(in srgb, var(--accent) 24%, var(--border))",
-            borderRadius: 999,
-            background: "color-mix(in srgb, var(--accent) 6%, var(--bg))",
-            color: "var(--text-muted)",
-            cursor: "pointer",
-            fontSize: 12,
-          }}
+          className={styles.compactionToggle}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
-            <path d="M4 7h16" />
-            <path d="M7 12h10" />
-            <path d="M10 17h4" />
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 7h16" /><path d="M7 12h10" /><path d="M10 17h4" />
           </svg>
           <span>Conversation compacted here</span>
-          {tokensBefore !== null && <span style={{ color: "var(--text-dim)" }}>{formatTokenCount(tokensBefore)} tokens before</span>}
-          {time && <span style={{ color: "var(--text-dim)" }}>{time}</span>}
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+          {tokensBefore !== null && <span className={styles.compactionMeta}>{formatTokenCount(tokensBefore)} tokens before</span>}
+          {time && <span className={styles.compactionMeta}>{time}</span>}
+          <svg className={styles.compactionChevron} data-expanded={expanded || undefined} width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polyline points="2 3.5 5 6.5 8 3.5" />
           </svg>
         </button>
-        <div style={{ height: 1, flex: 1, background: "linear-gradient(to left, transparent, var(--border))" }} />
       </div>
-
       {expanded && (
-        <div style={{
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          background: "var(--bg-panel)",
-          padding: "10px 12px",
-          color: "var(--text-muted)",
-          fontSize: 13,
-        }}>
-          <div style={{ marginBottom: 6, color: "var(--text-dim)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>Compaction summary</div>
+        <div className={styles.compactionBody}>
+          <div className={styles.compactionTitle}>Compaction summary</div>
           {parsedSummary.body ? (
             <MarkdownBody className="markdown-compaction-message">{parsedSummary.body}</MarkdownBody>
           ) : (
-            <span style={{ color: "var(--text-dim)" }}>(no summary)</span>
+            <span className={styles.timestamp}>(no summary)</span>
           )}
           <CompactionFileMetadata readFiles={parsedSummary.readFiles} modifiedFiles={parsedSummary.modifiedFiles} />
         </div>
@@ -1121,114 +798,55 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
   };
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div className={styles.customMessage}>
       <div
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          overflow: "hidden",
-          background: isHiddenDisplay ? "var(--bg-subtle)" : "var(--bg)",
-          opacity: isHiddenDisplay && !contentExpanded ? 0.82 : 1,
-        }}
+        className={styles.customCard}
+        data-hidden={isHiddenDisplay || undefined}
+        data-collapsed={isHiddenDisplay && !contentExpanded || undefined}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "7px 10px",
-            borderBottom: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-            color: "var(--text-muted)",
-            fontSize: 12,
-          }}
-        >
-          <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>
-            {title}
-          </span>
-          {isHiddenDisplay && <span style={{ color: "var(--text-dim)", fontSize: 11 }}>hidden extension message</span>}
-          {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
+        <div className={styles.customHeader}>
+          <span className={styles.customTitle}>{title}</span>
+          {isHiddenDisplay && <span className={styles.customFlag}>hidden extension message</span>}
+          {time && <span className={styles.customTime}>{time}</span>}
         </div>
 
         {contentExpanded ? (
-          <div style={{ padding: "6px 9px" }}>
+          <div className={styles.customBody}>
             {images.length > 0 && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: text ? 8 : 0 }}>
-                {images.map((img, i) => {
-                  const src = imageSource(img);
+              <div className={styles.imageGrid} data-has-text={Boolean(text) || undefined}>
+                {images.map((image) => {
+                  const src = imageSource(image);
                   if (!src) return null;
                   return (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={i}
-                      src={src}
-                      alt=""
-                      style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid var(--border)" }}
-                    />
+                    <img key={src} src={src} alt="" className={styles.messageImage} />
                   );
                 })}
               </div>
             )}
-            {text ? <MarkdownBody className="markdown-custom-message" cwd={cwd} onOpenFile={onOpenFile}>{text}</MarkdownBody> : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>(no message)</span>}
+            {text
+              ? <MarkdownBody className="markdown-custom-message" cwd={cwd} onOpenFile={onOpenFile}>{text}</MarkdownBody>
+              : <span className={styles.customEmpty}>(no message)</span>}
           </div>
         ) : (
-          <button
-            onClick={() => setContentExpanded(true)}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: "8px 10px",
-              border: "none",
-              background: "transparent",
-              color: "var(--text-dim)",
-              cursor: "pointer",
-              fontSize: 12,
-              textAlign: "left",
-            }}
-          >
+          <button type="button" className={styles.customPreview} onClick={() => setContentExpanded(true)}>
             {text ? previewText(text) : "Show extension message"}
           </button>
         )}
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "4px 9px",
-            borderTop: "1px solid var(--border)",
-            background: "var(--bg-subtle)",
-          }}
-        >
+        <div className={styles.customFooter}>
           {text || detailsText ? (
-            <button
-              onClick={copyContent}
-              style={{
-                padding: "3px 7px",
-                border: "none",
-                background: "none",
-                color: copied ? "var(--accent)" : "var(--text-dim)",
-                cursor: "pointer",
-                fontSize: 11,
-              }}
-            >
+            <button type="button" className={styles.action} data-active={copied || undefined} onClick={copyContent}>
               {copied ? "Copied" : "Copy"}
             </button>
           ) : null}
           {(hasDetails || isHiddenDisplay) && (
             <button
+              type="button"
+              className={styles.action}
               onClick={() => {
-                if (isHiddenDisplay) setContentExpanded((v) => !v);
-                else setDetailsExpanded((v) => !v);
-              }}
-              style={{
-                marginLeft: "auto",
-                padding: "3px 7px",
-                border: "none",
-                background: "none",
-                color: "var(--text-dim)",
-                cursor: "pointer",
-                fontSize: 11,
+                if (isHiddenDisplay) setContentExpanded((value) => !value);
+                else setDetailsExpanded((value) => !value);
               }}
             >
               {isHiddenDisplay
@@ -1239,24 +857,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
         </div>
 
         {hasDetails && ((isHiddenDisplay && contentExpanded) || (!isHiddenDisplay && detailsExpanded)) && (
-          <pre
-            style={{
-              margin: 0,
-              padding: "9px 10px",
-              borderTop: "1px solid var(--border)",
-              background: "var(--bg)",
-              color: "var(--text-muted)",
-              fontSize: 12,
-              lineHeight: 1.5,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              maxHeight: 360,
-              overflow: "auto",
-              fontFamily: "var(--font-mono)",
-            }}
-          >
-            {detailsText}
-          </pre>
+          <pre className={styles.customDetails}>{detailsText}</pre>
         )}
       </div>
     </div>

@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Badge, Button, EmptyState, Field, Input, Notice, Skeleton, Switch, Textarea } from "@/components/ui";
 import type { ProfilePreviewResult } from "@/lib/profile-preview";
 import { reconcileHiddenSkillRefsForPlugins, updatePackageSkillVisibility } from "@/lib/profile-ui-core";
-import { INCOMPLETE_TOOL_METADATA_MESSAGE, type PackageSource, type ProfileDefinition, type SkillRef, type ToolPreset } from "@/lib/profiles";
-
-const ERROR_COLOR = "#ef4444";
-const WARNING_COLOR = "#f59e0b";
+import {
+  INCOMPLETE_TOOL_METADATA_MESSAGE,
+  type PackageSource,
+  type ProfileDefinition,
+  type SkillRef,
+  type ToolPreset,
+} from "@/lib/profiles";
+import styles from "./ProfileManagerModal.module.css";
+import { packageLabel, packageSource, presetDescription } from "./profile-manager/helpers";
 
 type Draft = {
   name: string;
@@ -24,10 +30,11 @@ type Action =
   | { type: "hiddenSkillRefs"; value: SkillRef[] }
   | { type: "reset"; value: Draft };
 
-const PRESET_OPTIONS: { value: ToolPreset; label: string; hint: string }[] = [
-  { value: "none", label: "None", hint: "Plugin tools only" },
-  { value: "default", label: "Standard", hint: "Read, edit, and shell" },
-  { value: "full", label: "Full", hint: "Adds search and listing" },
+const STEP_LABELS = ["Profile", "Tools", "Plugins", "Skills", "Preview"] as const;
+const PRESET_OPTIONS: Array<{ value: ToolPreset; label: string; hint: string }> = [
+  { value: "none", label: "None", hint: "Use only tools supplied by selected plugins." },
+  { value: "default", label: "Standard", hint: "Read, edit, write, and shell tools for routine work." },
+  { value: "full", label: "Full", hint: "Standard tools plus project search and file listing." },
 ];
 
 function profileToDraft(profile?: ProfileDefinition | null): Draft {
@@ -40,23 +47,13 @@ function profileToDraft(profile?: ProfileDefinition | null): Draft {
   };
 }
 
-function pluginSource(plugin: PackageSource): string {
-  return typeof plugin === "string" ? plugin : plugin.source;
-}
-
-function pluginLabel(source: string): string {
-  if (source.startsWith("npm:")) return source.slice(4);
-  const parts = source.replace(/\/$/, "").split("/");
-  return source.startsWith("~") ? source : parts[parts.length - 1] || source;
-}
-
 function reducer(state: Draft, action: Action): Draft {
   switch (action.type) {
     case "name": return { ...state, name: action.value };
     case "description": return { ...state, description: action.value };
     case "preset": return { ...state, builtinPreset: action.value };
     case "plugins": {
-      const sources = action.value.map(pluginSource);
+      const sources = action.value.map(packageSource);
       return { ...state, plugins: action.value, hiddenSkillRefs: reconcileHiddenSkillRefsForPlugins(state.hiddenSkillRefs, sources) };
     }
     case "hiddenSkillRefs": return { ...state, hiddenSkillRefs: action.value };
@@ -74,6 +71,10 @@ export function draftToProfileInput(draft: Draft) {
   };
 }
 
+function draftSignature(draft: Draft): string {
+  return JSON.stringify(draftToProfileInput(draft));
+}
+
 export interface ProfileWizardProps {
   cwd: string | null;
   profile?: ProfileDefinition | null;
@@ -82,24 +83,50 @@ export interface ProfileWizardProps {
   onPreview: (draftProfile: unknown) => Promise<ProfilePreviewResult>;
   onSave: (draftProfile: unknown) => Promise<void>;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySkillRefs = [], onPreview, onSave, onCancel }: ProfileWizardProps) {
+export function ProfileWizard({
+  cwd,
+  profile,
+  availablePlugins = [],
+  inventorySkillRefs = [],
+  onPreview,
+  onSave,
+  onCancel,
+  onDirtyChange,
+  onBusyChange,
+}: ProfileWizardProps) {
   const [draft, dispatch] = useReducer(reducer, profileToDraft(profile));
+  const [step, setStep] = useState(0);
+  const [nameTouched, setNameTouched] = useState(false);
+  const [pluginFilter, setPluginFilter] = useState("");
+  const [skillFilter, setSkillFilter] = useState("");
   const [preview, setPreview] = useState<ProfilePreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const removedPluginsRef = useRef(new Map<string, PackageSource>());
+  const initialSignatureRef = useRef(draftSignature(profileToDraft(profile)));
 
   useEffect(() => {
+    const nextDraft = profileToDraft(profile);
     removedPluginsRef.current.clear();
-    dispatch({ type: "reset", value: profileToDraft(profile) });
+    initialSignatureRef.current = draftSignature(nextDraft);
+    dispatch({ type: "reset", value: nextDraft });
+    setStep(0);
+    setNameTouched(false);
+    setPluginFilter("");
+    setSkillFilter("");
     setPreview(null);
     setPreviewError(null);
+    setSaveError(null);
   }, [profile]);
 
   const input = useMemo(() => draftToProfileInput(draft), [draft]);
+  const dirty = useMemo(() => draftSignature(draft) !== initialSignatureRef.current, [draft]);
   const previewInput = useMemo(() => draftToProfileInput({
     name: "Profile preview",
     description: "",
@@ -107,7 +134,11 @@ export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySk
     plugins: draft.plugins,
     hiddenSkillRefs: draft.hiddenSkillRefs,
   }), [draft.builtinPreset, draft.hiddenSkillRefs, draft.plugins]);
-  const selectedSources = useMemo(() => new Set(draft.plugins.map(pluginSource)), [draft.plugins]);
+  const selectedSources = useMemo(() => new Set(draft.plugins.map(packageSource)), [draft.plugins]);
+
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onBusyChange?.(saving); }, [onBusyChange, saving]);
+
   const previewSkillRefs = useMemo(() => {
     const byKey = new Map<string, SkillRef>();
     const candidates = [
@@ -150,15 +181,15 @@ export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySk
   }, [cwd, onPreview, previewInput]);
 
   const togglePlugin = (plugin: PackageSource, checked: boolean) => {
-    const source = pluginSource(plugin);
+    const source = packageSource(plugin);
     let next: PackageSource[];
     if (checked) {
       next = [...draft.plugins, removedPluginsRef.current.get(source) ?? plugin];
       removedPluginsRef.current.delete(source);
     } else {
-      const selected = draft.plugins.find((item) => pluginSource(item) === source);
+      const selected = draft.plugins.find((item) => packageSource(item) === source);
       if (selected) removedPluginsRef.current.set(source, selected);
-      next = draft.plugins.filter((item) => pluginSource(item) !== source);
+      next = draft.plugins.filter((item) => packageSource(item) !== source);
     }
     dispatch({ type: "plugins", value: next });
   };
@@ -225,141 +256,299 @@ export function ProfileWizard({ cwd, profile, availablePlugins = [], inventorySk
   const enabledSkillCount = preview
     ? preview.skills.visibleSkillRefs.length
     : previewSkillRefs.filter((skill) => !hiddenSkillKeys.has(`${skill.source}\0${skill.path}`)).length;
+  const filteredPlugins = availablePlugins.filter((plugin) => {
+    const source = packageSource(plugin);
+    const value = pluginFilter.trim().toLowerCase();
+    return !value || source.toLowerCase().includes(value) || packageLabel(source).toLowerCase().includes(value);
+  });
+  const filteredSkills = previewSkillRefs.filter((skill) => {
+    const value = skillFilter.trim().toLowerCase();
+    return !value || [skill.name ?? "", skill.source, skill.path].some((item) => item.toLowerCase().includes(value));
+  });
 
-  const sectionStyle = {
-    border: "1px solid var(--border)",
-    borderRadius: 9,
-    background: "var(--bg-panel)",
-    padding: 12,
+  const save = async () => {
+    if (saving || !draft.name.trim()) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(input);
+      onDirtyChange?.(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <section style={{ display: "grid", gap: 10 }}>
-        <label style={{ display: "grid", gap: 5 }}>
-          <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>Name</span>
-          <input
-            value={draft.name}
-            placeholder="Profile name"
-            onChange={(event) => dispatch({ type: "name", value: event.target.value })}
-            style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)", color: "var(--text)", fontSize: 13, outline: "none" }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 5 }}>
-          <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 600 }}>Description <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>(optional)</span></span>
-          <textarea
-            value={draft.description}
-            placeholder="When to use this profile"
-            onChange={(event) => dispatch({ type: "description", value: event.target.value })}
-            style={{ width: "100%", minHeight: 58, resize: "vertical", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)", color: "var(--text)", fontSize: 13, lineHeight: 1.4, outline: "none" }}
-          />
-        </label>
-      </section>
+  const renderStep = () => {
+    if (step === 0) {
+      return (
+        <section className={styles.wizardStep}>
+          <div className={styles.stepHeading}>
+            <Badge tone="accent">Step 1</Badge>
+            <div><h3>Profile identity</h3><p>Name the profile and explain when it should be selected.</p></div>
+          </div>
+          <div className={styles.formSection}>
+            <Field label="Name" error={nameTouched && !draft.name.trim() ? "A profile name is required before continuing." : undefined}>
+              <Input
+                required
+                value={draft.name}
+                placeholder="Profile name"
+                onBlur={() => setNameTouched(true)}
+                onChange={(event) => dispatch({ type: "name", value: event.target.value })}
+              />
+            </Field>
+            <Field label="Description" optional hint="Describe the workload or safety boundary this profile is designed for.">
+              <Textarea
+                value={draft.description}
+                placeholder="When to use this profile"
+                onChange={(event) => dispatch({ type: "description", value: event.target.value })}
+              />
+            </Field>
+          </div>
+        </section>
+      );
+    }
 
-      <section style={sectionStyle}>
-        <div style={{ color: "var(--text)", fontSize: 12, fontWeight: 650, marginBottom: 8 }}>Built-in tools</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
-          {PRESET_OPTIONS.map((option) => {
-            const active = draft.builtinPreset === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                title={option.hint}
-                aria-pressed={active}
-                onClick={() => dispatch({ type: "preset", value: option.value })}
-                style={{
-                  minWidth: 0,
-                  padding: "8px 6px",
-                  border: `1px solid ${active ? "color-mix(in srgb, var(--accent) 55%, var(--border))" : "var(--border)"}`,
-                  borderRadius: 7,
-                  background: active ? "var(--bg-selected)" : "var(--bg)",
-                  color: active ? "var(--text)" : "var(--text-muted)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: active ? 650 : 500,
-                }}
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <details style={sectionStyle}>
-        <summary style={{ cursor: "pointer", color: "var(--text)", fontSize: 12, fontWeight: 650 }}>
-          Plugins <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>· {selectedSources.size} selected</span>
-        </summary>
-        <div style={{ maxHeight: 230, overflow: "auto", display: "grid", gap: 1, marginTop: 9, paddingRight: 2 }}>
-          {availablePlugins.length === 0 ? (
-            <div style={{ color: "var(--text-muted)", fontSize: 12 }}>No plugins found.</div>
-          ) : availablePlugins.map((plugin) => {
-            const source = pluginSource(plugin);
-            const checked = selectedSources.has(source);
-            return (
-              <label key={source} title={source} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, padding: "6px 4px", color: checked ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>
-                <input type="checkbox" checked={checked} onChange={(event) => togglePlugin(plugin, event.target.checked)} />
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pluginLabel(source)}</span>
-              </label>
-            );
-          })}
-        </div>
-      </details>
-
-      {previewSkillRefs.length > 0 && (
-        <details style={sectionStyle}>
-          <summary style={{ cursor: "pointer", color: "var(--text)", fontSize: 12, fontWeight: 650 }}>
-            Skills <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>· {enabledSkillCount} of {previewSkillRefs.length} on</span>
-          </summary>
-          <div style={{ maxHeight: 230, overflow: "auto", display: "grid", gap: 1, marginTop: 9, paddingRight: 2 }}>
-            {previewSkillRefs.map((skill) => {
-              const key = `${skill.source}\0${skill.path}`;
-              const fallbackVisible = !hiddenSkillKeys.has(key);
-              const checked = preview ? visibleSkillKeys.has(key) && fallbackVisible : fallbackVisible;
+    if (step === 1) {
+      return (
+        <section className={styles.wizardStep}>
+          <div className={styles.stepHeading}>
+            <Badge tone="accent">Step 2</Badge>
+            <div><h3>Built-in tools</h3><p>Choose the server-defined built-in tool baseline.</p></div>
+          </div>
+          <div className={styles.choiceGrid}>
+            {PRESET_OPTIONS.map((option) => {
+              const active = draft.builtinPreset === option.value;
               return (
-                <label key={key} title={`${skill.source} · ${skill.path}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, padding: "6px 4px", color: checked ? "var(--text)" : "var(--text-muted)", cursor: preview ? "pointer" : "default", fontSize: 12 }}>
-                  <input type="checkbox" checked={checked} disabled={!preview} onChange={(event) => toggleSkill(skill, event.target.checked)} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{skill.name ?? skill.path}</span>
-                </label>
+                <button
+                  type="button"
+                  className={styles.choiceCard}
+                  data-selected={active || undefined}
+                  aria-pressed={active}
+                  key={option.value}
+                  onClick={() => dispatch({ type: "preset", value: option.value })}
+                >
+                  <span className={styles.choiceCardTop}><strong>{option.label}</strong>{active && <Badge tone="accent">Selected</Badge>}</span>
+                  <span>{option.hint}</span>
+                  <small>{presetDescription(option.value)}</small>
+                </button>
               );
             })}
           </div>
-        </details>
-      )}
+        </section>
+      );
+    }
 
-      {!cwd && <div style={{ color: WARNING_COLOR, fontSize: 12 }}>Open a project to check plugins and skills.</div>}
-      {previewError && <div role="alert" style={{ border: "1px solid rgba(239,68,68,0.35)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,0.07)", color: ERROR_COLOR, fontSize: 12 }}>{previewError}</div>}
-      {preview && !preview.safeToApply && (
-        <div role="alert" style={{ border: "1px solid rgba(239,68,68,0.35)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,0.07)", color: ERROR_COLOR, fontSize: 12 }}>
-          <div style={{ fontWeight: 650 }}>This profile cannot be applied.</div>
-          {errorDiagnostics.map((diagnostic) => <div key={`${diagnostic.source ?? ""}:${diagnostic.path ?? ""}:${diagnostic.message}`} style={{ marginTop: 4 }}>{diagnostic.message}</div>)}
-        </div>
-      )}
-      {preview?.safeToApply && issueCount > 0 && (
-        <details style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", color: "var(--text-muted)", fontSize: 12 }}>
-          <summary style={{ cursor: "pointer" }}>{issueCount} profile note{issueCount === 1 ? "" : "s"}</summary>
-          <div style={{ display: "grid", gap: 5, marginTop: 7 }}>
-            {visibleDiagnostics.map((diagnostic) => <div key={`${diagnostic.type}:${diagnostic.source ?? ""}:${diagnostic.path ?? ""}:${diagnostic.message}`} style={{ color: diagnostic.type === "error" ? ERROR_COLOR : "var(--text-muted)" }}>{diagnostic.message}</div>)}
-            {preview.tools.conflicts.map((conflict) => <div key={`${conflict.name}:${conflict.pluginSource ?? "builtin"}`}><code>{conflict.name}</code> uses {conflict.pluginSource ?? conflict.selectedProvider}</div>)}
+    if (step === 2) {
+      return (
+        <section className={styles.wizardStep}>
+          <div className={styles.stepHeading}>
+            <Badge tone="accent">Step 3</Badge>
+            <div><h3>Plugin packages</h3><p>Select packages that may contribute extensions and skills.</p></div>
           </div>
-        </details>
-      )}
+          <div className={styles.stepToolbar}>
+            <Input
+              value={pluginFilter}
+              onChange={(event) => setPluginFilter(event.target.value)}
+              placeholder="Filter plugins"
+              aria-label="Filter profile plugins"
+            />
+            <Badge tone="neutral">{selectedSources.size} selected</Badge>
+          </div>
+          {availablePlugins.length === 0 ? (
+            <EmptyState title="No plugins available" description="No configured plugin package sources were found for this profile." />
+          ) : filteredPlugins.length === 0 ? (
+            <EmptyState
+              title="No matching plugins"
+              description={`Nothing matched “${pluginFilter.trim()}”.`}
+              action={<Button size="compact" onClick={() => setPluginFilter("")}>Clear filter</Button>}
+            />
+          ) : (
+            <div className={styles.toggleList}>
+              {filteredPlugins.map((plugin) => {
+                const source = packageSource(plugin);
+                const checked = selectedSources.has(source);
+                return (
+                  <Switch
+                    key={source}
+                    checked={checked}
+                    onCheckedChange={(next) => togglePlugin(plugin, next)}
+                    label={packageLabel(source)}
+                    description={source}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
+      );
+    }
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
-        <span style={{ flex: 1, color: "var(--text-dim)", fontSize: 11 }}>{previewLoading ? "Checking profile…" : ""}</span>
-        <button type="button" onClick={onCancel} style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>Cancel</button>
-        <button
-          type="button"
-          disabled={saving || !draft.name.trim()}
-          onClick={async () => {
-            setSaving(true);
-            try { await onSave(input); } finally { setSaving(false); }
-          }}
-          style={{ padding: "6px 14px", border: "1px solid var(--accent)", borderRadius: 6, background: "var(--accent)", color: "white", cursor: saving || !draft.name.trim() ? "default" : "pointer", fontSize: 12, fontWeight: 600, opacity: saving || !draft.name.trim() ? 0.55 : 1 }}
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+    if (step === 3) {
+      return (
+        <section className={styles.wizardStep}>
+          <div className={styles.stepHeading}>
+            <Badge tone="accent">Step 4</Badge>
+            <div><h3>Skill visibility</h3><p>Narrow the skills contributed by selected packages and standalone sources.</p></div>
+          </div>
+          {!cwd && <Notice tone="warning" title="Project required">Choose a project before resolving effective skills.</Notice>}
+          {previewError && <Notice tone="danger" title="Skill preview failed">{previewError}</Notice>}
+          <div className={styles.stepToolbar}>
+            <Input
+              value={skillFilter}
+              onChange={(event) => setSkillFilter(event.target.value)}
+              placeholder="Filter skills"
+              aria-label="Filter profile skills"
+            />
+            <Badge tone="neutral">{enabledSkillCount} of {previewSkillRefs.length} on</Badge>
+          </div>
+          {previewLoading && previewSkillRefs.length === 0 ? (
+            <div className={styles.stepSkeletons}>
+              {[0, 1, 2].map((item) => <Skeleton key={item} height={52} width={item === 1 ? "84%" : "100%"} />)}
+            </div>
+          ) : previewSkillRefs.length === 0 ? (
+            <EmptyState title="No skills resolved" description="Selected packages and standalone sources did not expose configurable skills." />
+          ) : filteredSkills.length === 0 ? (
+            <EmptyState
+              title="No matching skills"
+              description={`Nothing matched “${skillFilter.trim()}”.`}
+              action={<Button size="compact" onClick={() => setSkillFilter("")}>Clear filter</Button>}
+            />
+          ) : (
+            <div className={styles.toggleList}>
+              {filteredSkills.map((skill) => {
+                const key = `${skill.source}\0${skill.path}`;
+                const fallbackVisible = !hiddenSkillKeys.has(key);
+                const checked = preview ? visibleSkillKeys.has(key) && fallbackVisible : fallbackVisible;
+                return (
+                  <Switch
+                    key={key}
+                    checked={checked}
+                    disabled={!preview}
+                    onCheckedChange={(next) => toggleSkill(skill, next)}
+                    label={skill.name ?? skill.path}
+                    description={`${skill.source} · ${skill.path}`}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    return (
+      <section className={styles.wizardStep}>
+        <div className={styles.stepHeading}>
+          <Badge tone="accent">Step 5</Badge>
+          <div><h3>Effective preview</h3><p>Review the server-resolved capabilities before saving the definition.</p></div>
+        </div>
+        {!cwd && <Notice tone="warning" title="Project required">Choose a project to produce an effective preview.</Notice>}
+        {previewLoading && !preview ? (
+          <div className={styles.previewSkeletons}>
+            <Skeleton height={80} width="100%" />
+            <Skeleton height={132} width="100%" />
+          </div>
+        ) : previewError ? (
+          <Notice tone="danger" title="Preview failed">{previewError}</Notice>
+        ) : preview ? (
+          <>
+            <Notice
+              tone={preview.safeToApply ? (issueCount ? "warning" : "success") : "danger"}
+              title={preview.safeToApply ? (issueCount ? "Preview has notes" : "Ready to apply") : "Cannot be applied"}
+            >
+              {preview.safeToApply
+                ? issueCount
+                  ? `${issueCount} diagnostic or tool override note${issueCount === 1 ? "" : "s"} should be reviewed.`
+                  : "The server resolved this capability profile without blocking issues."
+                : "The definition may still be saved, but sessions cannot use it until the blocking issues are fixed."}
+            </Notice>
+            <div className={styles.previewStats}>
+              <div><span>Built-in tools</span><strong>{preview.tools.requestedBuiltinTools.length}</strong></div>
+              <div><span>Plugin tools</span><strong>{preview.tools.pluginTools.length}</strong></div>
+              <div><span>Plugins</span><strong>{preview.plugins.length}</strong></div>
+              <div><span>Visible skills</span><strong>{preview.skills.visibleSkillRefs.length}</strong></div>
+            </div>
+            {preview.tools.conflicts.length > 0 && (
+              <section className={styles.previewSection}>
+                <div className={styles.previewSectionHeader}><h4>Tool overrides</h4><Badge tone="warning">{preview.tools.conflicts.length}</Badge></div>
+                <div className={styles.previewRows}>
+                  {preview.tools.conflicts.map((conflict) => (
+                    <div key={`${conflict.name}:${conflict.pluginSource ?? "builtin"}`}>
+                      <code>{conflict.name}</code>
+                      <span>{conflict.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            {visibleDiagnostics.length > 0 && (
+              <section className={styles.previewSection}>
+                <div className={styles.previewSectionHeader}><h4>Diagnostics</h4><Badge tone={errorDiagnostics.length ? "danger" : "warning"}>{visibleDiagnostics.length}</Badge></div>
+                <div className={styles.previewRows}>
+                  {visibleDiagnostics.map((diagnostic) => (
+                    <div key={`${diagnostic.type}:${diagnostic.source ?? ""}:${diagnostic.path ?? ""}:${diagnostic.message}`}>
+                      <strong>{diagnostic.type}</strong>
+                      <span>{diagnostic.message}</span>
+                      {(diagnostic.source || diagnostic.path) && <code>{[diagnostic.source, diagnostic.path].filter(Boolean).join(" · ")}</code>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            <section className={styles.previewSection}>
+              <div className={styles.previewSectionHeader}><h4>Selected packages</h4><Badge tone="neutral">{preview.plugins.length}</Badge></div>
+              {preview.plugins.length > 0 ? (
+                <div className={styles.previewRows}>
+                  {preview.plugins.map((plugin) => (
+                    <div key={plugin.source}><strong>{packageLabel(plugin.source)}</strong><code>{plugin.source}</code></div>
+                  ))}
+                </div>
+              ) : <p className={styles.previewEmptyCopy}>No selected plugin packages.</p>}
+            </section>
+          </>
+        ) : (
+          <EmptyState title="Preview unavailable" description="Capability details will appear after the server resolves this draft." />
+        )}
+      </section>
+    );
+  };
+
+  return (
+    <div className={styles.wizard}>
+      <nav className={styles.stepper} aria-label="Profile editor steps">
+        {STEP_LABELS.map((label, index) => (
+          <button
+            type="button"
+            key={label}
+            className={styles.stepButton}
+            data-active={step === index || undefined}
+            data-complete={step > index || undefined}
+            aria-current={step === index ? "step" : undefined}
+            disabled={saving || (index > 0 && !draft.name.trim())}
+            onClick={() => setStep(index)}
+          >
+            <span>{index + 1}</span>
+            <strong>{label}</strong>
+          </button>
+        ))}
+      </nav>
+
+      {saveError && <Notice tone="danger" title="Profile was not saved">{saveError}</Notice>}
+      <div className={styles.wizardBody}>{renderStep()}</div>
+
+      <div className={styles.wizardFooter}>
+        <span className={styles.wizardStatus} aria-live="polite">
+          {saving ? "Saving profile…" : previewLoading ? "Checking effective capabilities…" : dirty ? "Unsaved changes" : "No unsaved changes"}
+        </span>
+        <Button disabled={saving} onClick={onCancel}>Cancel</Button>
+        {step > 0 && <Button disabled={saving} onClick={() => setStep((current) => Math.max(0, current - 1))}>Back</Button>}
+        {step < STEP_LABELS.length - 1 ? (
+          <Button variant="primary" disabled={!draft.name.trim() || saving} onClick={() => setStep((current) => Math.min(STEP_LABELS.length - 1, current + 1))}>Next</Button>
+        ) : (
+          <Button variant="primary" loading={saving} disabled={!draft.name.trim() || previewLoading} onClick={() => void save()}>Save profile</Button>
+        )}
       </div>
     </div>
   );

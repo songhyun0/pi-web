@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo, RefObject } from "react";
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentMessage, AssistantMessage, TextContent } from "@/lib/types";
+import styles from "./ChatMinimap.module.css";
 
 interface Props {
   messages: AgentMessage[];
@@ -10,7 +11,6 @@ interface Props {
   messageRefs: RefObject<(HTMLDivElement | null)[]>;
 }
 
-const MINIMAP_WIDTH = 36;
 
 function getMessagePreview(msg: AgentMessage | Partial<AgentMessage>): string {
   if (msg.role === "user") {
@@ -18,8 +18,7 @@ function getMessagePreview(msg: AgentMessage | Partial<AgentMessage>): string {
     if (typeof content === "string") return content.slice(0, 200);
     if (Array.isArray(content)) {
       return (content as { type: string; text?: string }[])
-        .filter((b) => b.type === "text" && b.text)
-        .map((b) => b.text!)
+        .flatMap((block) => block.type === "text" && block.text ? [block.text] : [])
         .join("\n")
         .slice(0, 200);
     }
@@ -41,12 +40,6 @@ function getMessagePreview(msg: AgentMessage | Partial<AgentMessage>): string {
   return "";
 }
 
-function getNodeColor(msg: AgentMessage | Partial<AgentMessage>): { bg: string; border: string } {
-  if (msg.role === "user") {
-    return { bg: "rgba(37,99,235,0.18)", border: "rgba(37,99,235,0.7)" };
-  }
-  return { bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.5)" };
-}
 
 function hasTextContent(msg: AgentMessage | Partial<AgentMessage>): boolean {
   if (msg.role === "user") return true;
@@ -81,7 +74,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   const allMessagesRef = useRef(allMessages);
   allMessagesRef.current = allMessages;
 
-  const updatePositionsRef = useRef<() => void>(null!);
+  const updatePositionsRef = useRef<() => void>(() => {});
   updatePositionsRef.current = () => {
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
@@ -148,6 +141,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   }, [scrollContainer, updatePositions]);
 
   // Re-measure when message count changes (new messages arrive)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: message count intentionally schedules a post-render remeasure.
   useEffect(() => {
     const t = setTimeout(updatePositions, 50);
     return () => clearTimeout(t);
@@ -234,138 +228,71 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   return (
     <div
       ref={containerRef}
+      className={styles.root}
+      role="slider"
+      tabIndex={0}
+      aria-label="Conversation minimap"
+      aria-orientation="vertical"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(scrollRatio * 100)}
       onMouseDown={handleMouseDown}
       onMouseEnter={() => setMinimapHovered(true)}
       onMouseLeave={() => { setMinimapHovered(false); setMouseYRatio(null); }}
-      onMouseMove={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        setMouseYRatio((e.clientY - rect.top) / rect.height);
+      onMouseMove={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        setMouseYRatio((event.clientY - rect.top) / rect.height);
       }}
-      style={{
-        width: MINIMAP_WIDTH,
-        flexShrink: 0,
-        position: "relative",
-        cursor: "default",
-        userSelect: "none",
-        borderLeft: "1px solid var(--border)",
-        background: "var(--bg-panel)",
-        overflow: "visible",
+      onKeyDown={(event) => {
+        const currentTop = scrollRatio * (1 - viewportRatio);
+        let nextTop: number | null = null;
+        if (event.key === "ArrowUp") nextTop = currentTop - 0.04;
+        else if (event.key === "ArrowDown") nextTop = currentTop + 0.04;
+        else if (event.key === "PageUp") nextTop = currentTop - viewportRatio * 0.8;
+        else if (event.key === "PageDown") nextTop = currentTop + viewportRatio * 0.8;
+        else if (event.key === "Home") nextTop = 0;
+        else if (event.key === "End") nextTop = 1 - viewportRatio;
+        if (nextTop === null) return;
+        event.preventDefault();
+        scrollToMinimapRatio(nextTop);
       }}
     >
       {/* Viewport indicator */}
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: `${viewportBoxTop}%`,
-          height: `${viewportBoxHeight}%`,
-          background: "rgba(100,100,100,0.1)",
-          borderTop: "1px solid rgba(100,100,100,0.2)",
-          borderBottom: "1px solid rgba(100,100,100,0.2)",
-          pointerEvents: "none",
-          zIndex: 1,
-        }}
-      />
+      <div className={styles.viewport} style={{ top: `${viewportBoxTop}%`, height: `${viewportBoxHeight}%` }} />
 
       {/* Message nodes */}
       {nodes.map((node) => {
-        const color = getNodeColor(node.msg);
         const isNearest = minimapHovered && nearestIndex === node.index;
-        const isUser = node.msg.role === "user";
-        const dotTop = node.topRatio * 100;
-
         return (
           <div
-            key={node.index}
-
-            style={{
-              position: "absolute",
-              top: `${dotTop}%`,
-              transform: "translateY(-50%)",
-              left: 0,
-              right: 0,
-              height: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              zIndex: 2,
-            }}
+            key={`${node.msg.role}:${node.topRatio}`}
+            className={styles.node}
+            data-role={node.msg.role}
+            data-nearest={isNearest || undefined}
+            style={{ top: `${node.topRatio * 100}%` }}
           >
-            {/* Dot */}
-            <div
-              style={{
-                width: isUser ? 8 : 6,
-                height: isUser ? 8 : 6,
-                borderRadius: isUser ? 2 : "50%",
-                background: color.bg,
-                border: `1.5px solid ${color.border}`,
-                flexShrink: 0,
-                transition: "transform 0.1s",
-                transform: isNearest ? "scale(1.6)" : "scale(1)",
-              }}
-            />
-
-
+            <div className={styles.dot} />
           </div>
         );
       })}
 
       {/* Center line */}
-      <div
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: 0,
-          bottom: 0,
-          width: 1,
-          background: "var(--border)",
-          transform: "translateX(-50%)",
-          zIndex: 0,
-        }}
-      />
+      <div className={styles.centerLine} />
 
       {/* Tooltips for all nodes, collision-free positions */}
-      {minimapHovered && nodes.map((node, i) => {
+      {minimapHovered && nodes.map((node, index) => {
         const preview = getMessagePreview(node.msg);
-        const color = getNodeColor(node.msg);
         const isNearest = nearestIndex === node.index;
         if (!preview || tooltipPositions.length === 0) return null;
         return (
           <div
-            key={node.index}
-            style={{
-              position: "absolute",
-              top: tooltipPositions[i],
-              right: "100%",
-              marginRight: 6,
-              background: "var(--bg)",
-              borderTop: `1px solid ${isNearest ? color.border : "var(--border)"}`,
-              borderRight: `1px solid ${isNearest ? color.border : "var(--border)"}`,
-              borderBottom: `1px solid ${isNearest ? color.border : "var(--border)"}`,
-              borderLeft: `2px solid ${color.border}`,
-              borderRadius: 4,
-              padding: "2px 7px",
-              width: 200,
-              zIndex: 100,
-              pointerEvents: "none",
-              opacity: isNearest ? 1 : 0.45,
-              transition: "top 0.1s, opacity 0.1s",
-            }}
+            key={`${node.msg.role}:${node.topRatio}`}
+            className={styles.tooltip}
+            data-role={node.msg.role}
+            data-nearest={isNearest || undefined}
+            style={{ top: tooltipPositions[index] }}
           >
-            <div
-              style={{
-                fontSize: 11,
-                color: isNearest ? "var(--text)" : "var(--text-muted)",
-                lineHeight: 1.4,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {preview}
-            </div>
+            {preview}
           </div>
         );
       })}

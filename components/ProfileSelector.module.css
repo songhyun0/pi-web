@@ -1,0 +1,310 @@
+.container {
+  position: relative;
+  min-width: 0;
+}
+
+.trigger {
+  max-width: 210px;
+  min-height: 34px;
+  padding: 0 var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-half);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 12px;
+  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap);
+}
+
+.trigger:hover,
+.trigger[data-open="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.trigger:focus-visible,
+.option:focus-visible,
+.manageButton:focus-visible,
+.issues summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.triggerIcon,
+.chevron {
+  flex: 0 0 auto;
+}
+
+.triggerLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issueDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: var(--warning);
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+.issueDot[data-tone="danger"] {
+  background: var(--error);
+}
+
+.chevron {
+  transition: transform var(--motion-fast) var(--ease-snap);
+}
+
+.chevron[data-open="true"] {
+  transform: rotate(180deg);
+}
+
+.menu {
+  position: absolute;
+  right: auto;
+  left: var(--profile-menu-shift, 0);
+  bottom: calc(100% + var(--space-half));
+  z-index: 120;
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(470px, calc(100dvh - 120px));
+  padding: var(--space-half);
+  overflow: auto;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  animation: profile-menu-enter var(--motion-enter) var(--ease-out) both;
+  overscroll-behavior: contain;
+}
+
+.menuHeader {
+  padding: var(--space-1) var(--space-1) var(--space-1-5);
+  display: grid;
+  gap: 3px;
+}
+
+.menuEyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.menuTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.menuTitleRow strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.menuHeader p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.optionList {
+  display: grid;
+  gap: 2px;
+}
+
+.option {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: var(--space-half) var(--space-1);
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
+}
+
+.option:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.optionActive {
+  color: var(--text);
+  background: var(--bg-selected);
+}
+
+.option:disabled,
+.optionUnavailable {
+  cursor: default;
+  opacity: var(--state-disabled-opacity);
+}
+
+.checkmark {
+  width: 12px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.optionCopy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.optionCopy strong,
+.optionCopy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optionCopy strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.optionCopy span {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.issues {
+  margin-top: var(--space-half);
+  padding: var(--space-1);
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-top: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+  border-radius: var(--radius-sm);
+}
+
+.issues[data-tone="danger"] {
+  color: var(--error);
+  background: var(--error-soft);
+  border-color: color-mix(in srgb, var(--error) 30%, var(--border));
+}
+
+.issues summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.issueList {
+  margin-top: var(--space-1);
+  display: grid;
+  gap: var(--space-half);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.issueList [data-tone="danger"] {
+  color: var(--error);
+}
+
+.issueList code {
+  color: inherit;
+  font-family: var(--font-mono);
+}
+
+.manageButton {
+  width: 100%;
+  min-height: 54px;
+  margin-top: var(--space-half);
+  padding: var(--space-1);
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
+}
+
+.manageButton:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.manageButton > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.manageButton strong,
+.manageButton small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manageButton strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.manageButton small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+@keyframes profile-menu-enter {
+  from { opacity: 0; transform: translateY(4px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 640px) {
+  .trigger {
+    max-width: min(210px, 52vw);
+  }
+
+  .menu {
+    width: min(320px, calc(100vw - 24px));
+    max-height: min(68dvh, 500px);
+  }
+}
+
+@media (pointer: coarse) {
+  .trigger,
+  .option,
+  .manageButton {
+    min-height: var(--control-touch);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation: none;
+  }
+}

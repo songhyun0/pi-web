@@ -1,7 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { ProjectTrustAction, ProjectTrustStatus } from "@/lib/project-trust";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, Dialog, EmptyState, Notice, Skeleton } from "@/components/ui";
+import type {
+  ProjectTrustAction,
+  ProjectTrustActionInfo,
+  ProjectTrustStatus,
+} from "@/lib/project-trust";
+import styles from "./ProjectTrustModal.module.css";
+import {
+  effectiveTrustSummary,
+  shortenTrustPath,
+  trustActionConfirmation,
+  trustActionTone,
+  trustDecisionLabel,
+  trustResourceSummary,
+  trustSourceLabel,
+} from "./project-trust/helpers";
 
 interface Props {
   cwd: string;
@@ -9,128 +24,260 @@ interface Props {
   onChanged?: () => void;
 }
 
-function statusColor(trusted: boolean, promptRequired: boolean): string {
-  if (trusted) return "var(--success)";
-  return promptRequired ? "var(--warning)" : "var(--error)";
+async function readTrustResponse(response: Response): Promise<ProjectTrustStatus> {
+  const body = await response.json().catch(() => ({})) as ProjectTrustStatus & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+  return body;
 }
 
 export function ProjectTrustModal({ cwd, onClose, onChanged }: Props) {
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [status, setStatus] = useState<ProjectTrustStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingAction, setSavingAction] = useState<ProjectTrustAction | null>(null);
+  const [actionIntent, setActionIntent] = useState<ProjectTrustActionInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const busy = savingAction !== null;
 
-  const load = () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
-    fetch(`/api/project-trust?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" })
-      .then(async (res) => {
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-        return body as ProjectTrustStatus;
-      })
-      .then(setStatus)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  };
+    setSavedMessage(null);
+    try {
+      const response = await fetch(`/api/project-trust?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store", signal });
+      setStatus(await readTrustResponse(response));
+    } catch (loadError) {
+      if ((loadError as Error).name !== "AbortError") {
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      }
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [cwd]);
 
-  useEffect(load, [cwd]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const save = async (action: ProjectTrustAction) => {
     setSavingAction(action);
     setError(null);
     setSavedMessage(null);
     try {
-      const res = await fetch("/api/project-trust", {
+      const response = await fetch("/api/project-trust", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd, action }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-      setStatus(body as ProjectTrustStatus);
+      setStatus(await readTrustResponse(response));
+      setActionIntent(null);
       setSavedMessage("Trust decision saved. Existing live sessions may need /reload or a new session before project-local resources change.");
       onChanged?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
     } finally {
       setSavingAction(null);
     }
   };
 
+  const resources = useMemo(() => status?.inventory.filter((entry) => entry.exists) ?? [], [status]);
+  const trustSummary = status ? effectiveTrustSummary(status.effective) : null;
+  const footerStatus = savingAction
+    ? "Saving trust decision…"
+    : loading
+      ? "Refreshing trust state…"
+      : savedMessage
+        ? "Decision saved"
+        : trustSummary?.title ?? "Trust state unavailable";
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.48)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={onClose}>
-      <div onClick={(event) => event.stopPropagation()} style={{ width: "min(820px, 96vw)", maxHeight: "86vh", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg)", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>Project trust</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{cwd}</div>
+    <>
+      <Dialog
+        open
+        onOpenChange={(nextOpen) => { if (!nextOpen && !busy && !actionIntent) onClose(); }}
+        title="Project trust"
+        description={<code>{shortenTrustPath(cwd)}</code>}
+        variant="adaptive"
+        size="xl"
+        bodyClassName={styles.dialogBody}
+        initialFocusRef={closeRef}
+        dismissible={!busy && !actionIntent}
+        footer={
+          <div className={styles.footer}>
+            <span className={styles.footerStatus} aria-live="polite">{footerStatus}</span>
+            <Button loading={loading} disabled={busy || loading} onClick={() => void load()}>Refresh</Button>
+            <Button ref={closeRef} variant="primary" disabled={busy} onClick={onClose}>Close</Button>
           </div>
-          <button onClick={onClose} style={{ alignSelf: "flex-start", border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Close</button>
-        </div>
-        <div style={{ overflow: "auto", padding: 16 }}>
-          {loading ? (
-            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading trust state…</div>
-          ) : error ? (
-            <div style={{ color: "var(--error)", fontSize: 13 }}>{error}</div>
-          ) : status ? (
-            <div style={{ display: "grid", gap: 16 }}>
-              <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, background: "var(--bg-panel)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ color: statusColor(status.effective.trusted, status.effective.promptRequired), fontWeight: 600 }}>
-                    {status.effective.trusted ? "Trusted" : status.effective.promptRequired ? "Needs decision" : "Not trusted"}
-                  </span>
-                  <span style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)" }}>{status.effective.source}</span>
-                </div>
-                <div style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 8 }}>{status.effective.reason}</div>
-                <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 8 }}>
-                  defaultProjectTrust: <code>{status.defaultProjectTrust}</code> · applies after: <code>{status.appliesAfter}</code>
-                </div>
+        }
+      >
+        <div className={styles.workspace} aria-busy={loading || undefined}>
+          {loading && !status ? (
+            <div className={styles.loadingState}>
+              <Skeleton height={176} width="100%" />
+              <div className={styles.loadingColumns}>
+                <Skeleton height={300} width="100%" />
+                <Skeleton height={300} width="100%" />
               </div>
+            </div>
+          ) : error && !status ? (
+            <div className={styles.loadFailure}>
+              <Notice tone="danger" title="Trust state could not be loaded" actions={<Button size="compact" onClick={() => void load()}>Retry</Button>}>{error}</Notice>
+              <EmptyState title="Project trust unavailable" description="No trust decision can be made until the server state is available." />
+            </div>
+          ) : status && trustSummary ? (
+            <div className={styles.content}>
+              {loading && <div className={styles.refreshingBar}><Skeleton height={4} width="100%" /></div>}
+              <section className={styles.statusCard} data-tone={trustSummary.tone}>
+                <div className={styles.statusLead}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 3 20 6v5c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-3Z" />
+                    {status.effective.trusted ? <polyline points="8.5 12 11 14.5 16 9.5" /> : <path d="M9 9l6 6m0-6-6 6" />}
+                  </svg>
+                  <div>
+                    <span className={styles.statusEyebrow}>{trustSummary.eyebrow}</span>
+                    <h2>{trustSummary.title}</h2>
+                    <p>{status.effective.reason}</p>
+                  </div>
+                </div>
+                <div className={styles.statusBadges}>
+                  <Badge tone={trustSummary.tone}>{trustSourceLabel(status.effective.source)}</Badge>
+                  {status.effective.savedPath && <Badge tone="neutral">saved path</Badge>}
+                </div>
+                <dl className={styles.statusFacts}>
+                  <div><dt>Detected resources</dt><dd>{resources.length}</dd></div>
+                  <div><dt>Saved decision</dt><dd>{status.savedDecision ? (status.savedDecision.decision ? "Trust" : "Block") : "None"}</dd></div>
+                  <div><dt>Runtime default</dt><dd><code>{status.defaultProjectTrust}</code></dd></div>
+                  <div><dt>Applies after</dt><dd>Reload or new session</dd></div>
+                </dl>
+                {status.effective.savedPath && (
+                  <div className={styles.savedPath}><span>Decision source</span><code title={status.effective.savedPath}>{shortenTrustPath(status.effective.savedPath)}</code></div>
+                )}
+              </section>
 
-              <div style={{ border: "1px solid color-mix(in srgb, var(--warning) 35%, var(--border))", borderRadius: 10, padding: 14, background: "color-mix(in srgb, var(--warning) 8%, transparent)", color: "var(--text)" }}>
+              {savedMessage && <Notice tone="success" title="Trust decision saved">{savedMessage}</Notice>}
+              {error && <Notice tone="danger" title="Trust action failed">{error}</Notice>}
+
+              <Notice tone={status.requiresTrust ? "warning" : "neutral"} title={status.requiresTrust ? "Review local code before trusting" : "No trust-requiring resources detected"}>
                 Project-local <code>.pi/extensions</code> and pi packages can execute local code. Only trust repositories you understand. Trusting enables project-local settings, extensions, skills, prompts, themes, and packages.
-              </div>
+              </Notice>
 
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Detected project-local resources</div>
-                <div style={{ display: "grid", gap: 6 }}>
-                  {status.inventory.filter((entry) => entry.exists).length === 0 ? (
-                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>No trust-requiring project-local resources were detected.</div>
-                  ) : status.inventory.filter((entry) => entry.exists).map((entry) => (
-                    <div key={`${entry.kind}:${entry.path}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "7px 9px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-panel)", fontSize: 12 }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ color: "var(--text)", fontWeight: 500 }}>{entry.label}</div>
-                        <div style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.path}</div>
-                      </div>
-                      <div style={{ color: "var(--text-muted)", flexShrink: 0 }}>{entry.count}</div>
+              <div className={styles.mainGrid}>
+                <section className={styles.panel}>
+                  <div className={styles.panelHeader}>
+                    <div>
+                      <h3>Detected project resources</h3>
+                      <p>Server inventory of local configuration and executable resources.</p>
                     </div>
-                  ))}
-                </div>
-              </div>
+                    <Badge tone={resources.length ? "warning" : "neutral"}>{resources.length}</Badge>
+                  </div>
+                  {resources.length === 0 ? (
+                    <EmptyState title="No local resources detected" description="This project currently has no resources that require an explicit trust decision." />
+                  ) : (
+                    <div className={styles.resourceList}>
+                      {resources.map((entry) => (
+                        <article className={styles.resourceRow} key={`${entry.kind}:${entry.path}`}>
+                          <div className={styles.resourceHeading}>
+                            <strong>{entry.label}</strong>
+                            <Badge tone={entry.requiresTrust ? "warning" : "neutral"}>{trustResourceSummary(entry)}</Badge>
+                          </div>
+                          <code title={entry.path}>{shortenTrustPath(entry.path)}</code>
+                          {entry.details && entry.details.length > 0 && (
+                            <details className={styles.resourceDetails}>
+                              <summary>{entry.details.length} configured source{entry.details.length === 1 ? "" : "s"}</summary>
+                              <div>
+                                {entry.details.map((detail) => <code key={detail}>{detail}</code>)}
+                              </div>
+                            </details>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Decision</div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  {status.actions.map((action) => (
-                    <button key={action.action} disabled={savingAction !== null} onClick={() => save(action.action)} style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-panel)", color: "var(--text)", padding: 12, cursor: savingAction ? "default" : "pointer", opacity: savingAction && savingAction !== action.action ? 0.6 : 1 }}>
-                      <div style={{ fontWeight: 600 }}>{savingAction === action.action ? "Saving… " : ""}{action.label}</div>
-                      <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4 }}>{action.description}</div>
-                    </button>
-                  ))}
-                </div>
+                <aside className={styles.panel}>
+                  <div className={styles.panelHeader}>
+                    <div>
+                      <h3>{status.requiresTrust ? "Decision" : "Optional saved decision"}</h3>
+                      <p>{status.requiresTrust ? "Choose the narrowest trust boundary that matches your intent." : "No decision is required now; you may still save an explicit policy for this folder."}</p>
+                    </div>
+                  </div>
+                  {status.savedDecision && (
+                    <div className={styles.currentDecision}>
+                      <span>Current stored decision</span>
+                      <strong>{status.savedDecision.decision ? "Trust" : "Block"}</strong>
+                      <code title={status.savedDecision.path}>{shortenTrustPath(status.savedDecision.path)}</code>
+                    </div>
+                  )}
+                  <div className={styles.actionList}>
+                    {status.actions.map((action) => (
+                      <button
+                        type="button"
+                        className={styles.actionCard}
+                        data-tone={trustActionTone(action.action)}
+                        disabled={busy}
+                        key={action.action}
+                        onClick={() => { setError(null); setSavedMessage(null); setActionIntent(action); }}
+                      >
+                        <span className={styles.actionCardTop}>
+                          <strong>{action.label}</strong>
+                          <Badge tone={trustActionTone(action.action)}>{action.updates.length} update{action.updates.length === 1 ? "" : "s"}</Badge>
+                        </span>
+                        <span>{action.description}</span>
+                        <small>Review decision →</small>
+                      </button>
+                    ))}
+                  </div>
+                </aside>
               </div>
-
-              {savedMessage && (
-                <div style={{ border: "1px solid color-mix(in srgb, var(--success) 45%, var(--border))", borderRadius: 10, padding: 12, color: "var(--success)", background: "color-mix(in srgb, var(--success) 9%, transparent)", fontSize: 13 }}>
-                  {savedMessage}
-                </div>
-              )}
             </div>
           ) : null}
         </div>
-      </div>
-    </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(actionIntent)}
+        onOpenChange={(nextOpen) => { if (!nextOpen && !busy) setActionIntent(null); }}
+        title={actionIntent?.label ?? "Confirm trust decision"}
+        description="Review the persisted trust-store changes before continuing."
+        size="sm"
+        dismissible={!busy}
+        footer={
+          <>
+            <Button disabled={busy} onClick={() => setActionIntent(null)}>Cancel</Button>
+            <Button
+              variant={actionIntent?.action === "deny" ? "danger" : actionIntent?.action === "clear" ? "secondary" : "primary"}
+              loading={Boolean(actionIntent && savingAction === actionIntent.action)}
+              disabled={!actionIntent}
+              onClick={() => { if (actionIntent) void save(actionIntent.action); }}
+            >
+              {actionIntent ? trustActionConfirmation(actionIntent.action) : "Confirm"}
+            </Button>
+          </>
+        }
+      >
+        {actionIntent && (
+          <div className={styles.confirmation}>
+            <Notice
+              tone={actionIntent.action === "deny" ? "danger" : "warning"}
+              title={actionIntent.action === "trust" || actionIntent.action === "trust-parent" ? "Local code may run" : actionIntent.action === "deny" ? "Project resources will be blocked" : "Fallback behavior will apply"}
+            >
+              The decision affects project-local resources after <code>/reload</code> or when a new session starts.
+            </Notice>
+            <div className={styles.updateList}>
+              {actionIntent.updates.map((update) => (
+                <div key={`${update.path}:${String(update.decision)}`}>
+                  <Badge tone={update.decision === true ? "success" : update.decision === false ? "danger" : "neutral"}>{trustDecisionLabel(update.decision)}</Badge>
+                  <code title={update.path}>{shortenTrustPath(update.path)}</code>
+                </div>
+              ))}
+            </div>
+            {error && <Notice tone="danger" title="Trust action failed">{error}</Notice>}
+          </div>
+        )}
+      </Dialog>
+    </>
   );
 }

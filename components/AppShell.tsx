@@ -1,43 +1,56 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { SessionSidebar } from "./SessionSidebar";
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "@/hooks/useTheme";
+import { useViewportTier } from "@/hooks/useViewportTier";
+import { type AppSettings, DEFAULT_APP_SETTINGS } from "@/lib/app-settings";
+import { copyText } from "@/lib/clipboard";
+import { buildAtMentionText } from "@/lib/file-fuzzy";
+import { getFileName } from "@/lib/file-paths";
+import {
+  type MobileWorkspaceLayer,
+  readMobileInspectorFiles,
+  readMobileWorkspaceLayer,
+  withMobileInspectorFiles,
+  withMobileWorkspaceLayer,
+  withoutMobileInspectorFiles,
+  withoutMobileWorkspaceLayer,
+} from "@/lib/mobile-workspace";
+import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SlashUiAction } from "@/lib/slash-command-registry";
+import type { SessionInfo, SessionTreeNode } from "@/lib/types";
+import styles from "./AppShell.module.css";
+import { InspectorFileSheet } from "./app-shell/InspectorFileSheet";
+import { type MobileMoreActions, MobileMoreSheet } from "./app-shell/MobileMoreSheet";
+import { type SessionCopyField, SessionInfoPanel } from "./app-shell/SessionInfoPanel";
+import { BranchNavigator } from "./BranchNavigator";
+import type { ChatInputHandle } from "./ChatInput";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { GitChangesPanel } from "./GitChangesPanel";
-import { TerminalPanel } from "./TerminalPanel";
-import { TabBar, type Tab } from "./TabBar";
-import { ModelsConfig } from "./ModelsConfig";
-import { SkillsConfig } from "./SkillsConfig";
-import { PluginsConfig } from "./PluginsConfig";
-import { SettingsModal } from "./SettingsModal";
-import { ProjectTrustModal } from "./ProjectTrustModal";
 import { HotkeysModal } from "./HotkeysModal";
-import { BranchNavigator } from "./BranchNavigator";
-import { useTheme } from "@/hooks/useTheme";
-import { useIsMobile } from "@/hooks/useIsMobile";
-import { copyText } from "@/lib/clipboard";
-import { getFileName } from "@/lib/file-paths";
-import { buildAtMentionText } from "@/lib/file-fuzzy";
-import type { SlashUiAction } from "@/lib/slash-command-registry";
-import { DEFAULT_APP_SETTINGS, type AppSettings } from "@/lib/app-settings";
-import type { SessionInfo, SessionTreeNode } from "@/lib/types";
-import type { ChatInputHandle } from "./ChatInput";
-import type { SessionStatsInfo } from "@/lib/pi-types";
-
-type SessionCopyField = "file" | "id";
+import { ModelsConfig } from "./ModelsConfig";
+import { PluginsConfig } from "./PluginsConfig";
+import { ProjectTrustModal } from "./ProjectTrustModal";
+import { SessionSidebar } from "./SessionSidebar";
+import { SettingsModal } from "./SettingsModal";
+import { SkillsConfig } from "./SkillsConfig";
+import { type Tab, TabBar } from "./TabBar";
+import { TerminalPanel } from "./TerminalPanel";
+import { Button, IconButton } from "./ui";
 
 type ResizingPanel = "sidebar" | "right";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "pi-sidebar-width";
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "pi-right-panel-width";
-const SIDEBAR_DEFAULT_WIDTH = 260;
-const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_DEFAULT_WIDTH = 288;
+const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 520;
 const RIGHT_PANEL_DEFAULT_WIDTH = 560;
 const RIGHT_PANEL_MIN_WIDTH = 300;
 const RIGHT_PANEL_MAX_WIDTH = 960;
+const OVERLAY_BREAKPOINT = 1024;
 
 function clampWidth(value: number, min: number, max: number): number {
   const safeMax = Math.max(min, max);
@@ -45,17 +58,17 @@ function clampWidth(value: number, min: number, max: number): number {
 }
 
 function getSidebarMaxWidth(): number {
-  if (typeof window === "undefined") return SIDEBAR_MAX_WIDTH;
+  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return SIDEBAR_MAX_WIDTH;
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.floor(window.innerWidth * 0.5)));
 }
 
 function getRightPanelMaxWidth(): number {
-  if (typeof window === "undefined") return RIGHT_PANEL_MAX_WIDTH;
+  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return RIGHT_PANEL_MAX_WIDTH;
   return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, Math.floor(window.innerWidth * 0.75)));
 }
 
 function getRightPanelDefaultWidth(): number {
-  if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
+  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return RIGHT_PANEL_DEFAULT_WIDTH;
   return clampWidth(Math.round(window.innerWidth * 0.42), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth());
 }
 
@@ -73,7 +86,8 @@ export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
-  const isMobile = useIsMobile();
+  const viewportTier = useViewportTier();
+  const usesOverlayLayout = viewportTier !== "desktop";
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -89,19 +103,104 @@ export function AppShell() {
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [inspectorFileSheetOpen, setInspectorFileSheetOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
   const [layoutPrefsLoaded, setLayoutPrefsLoaded] = useState(false);
   const [resizingPanel, setResizingPanel] = useState<ResizingPanel | null>(null);
-  // On mobile the sidebar is an overlay drawer; hide it by default so the chat
-  // is visible on load. Runs once the breakpoint resolves after hydration.
-  useEffect(() => {
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+  const sidebarPanelRef = useRef<HTMLElement>(null);
+  const inspectorPanelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+
+  const applyWorkspaceLayer = useCallback((layer: MobileWorkspaceLayer | null) => {
+    setSidebarOpen(layer === "sessions");
+    setRightPanelOpen(layer === "inspector");
+    setMobileMoreOpen(layer === "more");
+  }, []);
+
+  const openWorkspaceLayer = useCallback((layer: MobileWorkspaceLayer) => {
+    if (!usesOverlayLayout) return;
+    const currentLayer = readMobileWorkspaceLayer(window.history.state);
+    const nextState = withMobileWorkspaceLayer(withoutMobileInspectorFiles(window.history.state), layer);
+    if (currentLayer) window.history.replaceState(nextState, "", window.location.href);
+    else window.history.pushState(nextState, "", window.location.href);
+    applyWorkspaceLayer(layer);
+  }, [applyWorkspaceLayer, usesOverlayLayout]);
+
+  const dismissWorkspaceLayer = useCallback(() => {
+    if (!usesOverlayLayout) return;
+    window.history.replaceState(withoutMobileInspectorFiles(withoutMobileWorkspaceLayer(window.history.state)), "", window.location.href);
+    applyWorkspaceLayer(null);
+  }, [applyWorkspaceLayer, usesOverlayLayout]);
+
+  const closeWorkspaceLayer = useCallback(() => {
+    if (!usesOverlayLayout) return;
+    if (readMobileWorkspaceLayer(window.history.state)) window.history.back();
+    else applyWorkspaceLayer(null);
+  }, [applyWorkspaceLayer, usesOverlayLayout]);
+
+  const openInspectorFileSheet = useCallback(() => {
+    if (!usesOverlayLayout) return;
+    if (!readMobileInspectorFiles(window.history.state)) {
+      window.history.pushState(withMobileInspectorFiles(window.history.state), "", window.location.href);
+    }
+    setInspectorFileSheetOpen(true);
+  }, [usesOverlayLayout]);
+
+  const closeInspectorFileSheet = useCallback(() => {
+    if (!usesOverlayLayout) {
+      setInspectorFileSheetOpen(false);
+      return;
+    }
+    if (readMobileInspectorFiles(window.history.state)) window.history.back();
+    else setInspectorFileSheetOpen(false);
+  }, [usesOverlayLayout]);
+
+  useEffect(() => {
+    if (!usesOverlayLayout) {
+      if (readMobileWorkspaceLayer(window.history.state)) {
+        window.history.replaceState(withoutMobileInspectorFiles(withoutMobileWorkspaceLayer(window.history.state)), "", window.location.href);
+      }
+      setInspectorFileSheetOpen(false);
+      setMobileMoreOpen(false);
+      setSidebarOpen(true);
+      return;
+    }
+
+    const syncHistoryLayers = () => {
+      applyWorkspaceLayer(readMobileWorkspaceLayer(window.history.state));
+      setInspectorFileSheetOpen(readMobileInspectorFiles(window.history.state));
+    };
+    syncHistoryLayers();
+    window.addEventListener("popstate", syncHistoryLayers);
+    return () => window.removeEventListener("popstate", syncHistoryLayers);
+  }, [applyWorkspaceLayer, usesOverlayLayout]);
+
+  useEffect(() => {
+    if (!usesOverlayLayout || (!sidebarOpen && !rightPanelOpen)) return;
+    const panel = sidebarOpen ? sidebarPanelRef.current : inspectorPanelRef.current;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const preferred = sidebarOpen
+        ? panel?.querySelector<HTMLElement>("[aria-label='Close workspace navigator']")
+        : panel?.querySelector<HTMLElement>("[aria-label='Back to conversation']");
+      (preferred ?? panel)?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || document.querySelector(".pi-dialog")) return;
+      event.preventDefault();
+      closeWorkspaceLayer();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeWorkspaceLayer, rightPanelOpen, sidebarOpen, usesOverlayLayout]);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,7 +220,13 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    document.title = appSettings.displayName;
+    const applyTitle = () => {
+      if (document.title !== appSettings.displayName) document.title = appSettings.displayName;
+    };
+    applyTitle();
+    const observer = new MutationObserver(applyTitle);
+    observer.observe(document.head, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
   }, [appSettings.displayName]);
 
   useEffect(() => {
@@ -168,7 +273,6 @@ export function AppShell() {
   }, []);
 
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
-  const systemBtnRef = useRef<HTMLButtonElement>(null);
 
   const handleSystemPromptChange = useCallback((prompt: string | null) => {
     setSystemPrompt(prompt);
@@ -206,27 +310,33 @@ export function AppShell() {
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const toggleTopPanel = useCallback((panel: "branches" | "system" | "session") => {
-    if (isMobile) setSidebarOpen(false);
-    setActiveTopPanel((cur) => cur === panel ? null : panel);
-  }, [isMobile]);
+    if (usesOverlayLayout) dismissWorkspaceLayer();
+    setActiveTopPanel((current) => current === panel ? null : panel);
+  }, [dismissWorkspaceLayer, usesOverlayLayout]);
 
   const openSessionStatsPanel = useCallback(() => {
-    if (isMobile) setSidebarOpen(false);
+    if (usesOverlayLayout) dismissWorkspaceLayer();
     setActiveTopPanel("session");
-  }, [isMobile]);
+  }, [dismissWorkspaceLayer, usesOverlayLayout]);
 
   const handleSidebarToggle = useCallback(() => {
-    if (isMobile) setActiveTopPanel(null);
+    setActiveTopPanel(null);
+    if (usesOverlayLayout) {
+      if (sidebarOpen) closeWorkspaceLayer();
+      else openWorkspaceLayer("sessions");
+      return;
+    }
     setSidebarOpen((open) => !open);
-  }, [isMobile]);
+  }, [closeWorkspaceLayer, openWorkspaceLayer, sidebarOpen, usesOverlayLayout]);
 
   const handleSidebarClose = useCallback(() => {
     setActiveTopPanel(null);
-    setSidebarOpen(false);
-  }, []);
+    if (usesOverlayLayout) closeWorkspaceLayer();
+    else setSidebarOpen(false);
+  }, [closeWorkspaceLayer, usesOverlayLayout]);
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (isMobile || !sidebarOpen) return;
+    if (usesOverlayLayout || !sidebarOpen) return;
     event.preventDefault();
     setActiveTopPanel(null);
     setResizingPanel("sidebar");
@@ -254,10 +364,10 @@ export function AppShell() {
     window.addEventListener("pointermove", handleMove, { passive: false });
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
-  }, [isMobile, sidebarOpen, sidebarWidth]);
+  }, [sidebarOpen, sidebarWidth, usesOverlayLayout]);
 
   const startRightPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (isMobile) return;
+    if (usesOverlayLayout) return;
     event.preventDefault();
     setActiveTopPanel(null);
     setResizingPanel("right");
@@ -285,24 +395,24 @@ export function AppShell() {
     window.addEventListener("pointermove", handleMove, { passive: false });
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
-  }, [isMobile, rightPanelWidth]);
+  }, [rightPanelWidth, usesOverlayLayout]);
 
   useEffect(() => {
-    if (!activeTopPanel || !topBarRef.current) return;
+    const topBar = topBarRef.current;
+    if (!activeTopPanel || !topBar) return;
     const update = () => {
-      const rect = topBarRef.current!.getBoundingClientRect();
+      const rect = topBar.getBoundingClientRect();
       setTopPanelPos({ top: rect.bottom, left: rect.left, width: rect.width });
     };
     update();
-    const ro = new ResizeObserver(update);
-    ro.observe(topBarRef.current);
-    return () => ro.disconnect();
+    const observer = new ResizeObserver(update);
+    observer.observe(topBar);
+    return () => observer.disconnect();
   }, [activeTopPanel]);
 
   // Right panel — changes review plus file tabs
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
-  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightPanelView, setRightPanelView] = useState<"changes" | "terminal" | "file">("changes");
   const [gitChangesCount, setGitChangesCount] = useState<number | null>(null);
 
@@ -355,8 +465,9 @@ export function AppShell() {
     setSessionKey((k) => k + 1);
     setSystemPrompt(null);
     setInitialSessionRestored(true);
-    // On mobile, collapse the overlay drawer so the chat is revealed after pick.
-    if (isMobile && !isRestore) setSidebarOpen(false);
+    // Overlay navigation is browser-history-aware; selecting content dismisses
+    // the layer in place so the new session URL becomes the current entry.
+    if (usesOverlayLayout && !isRestore) dismissWorkspaceLayer();
     if (isRestore) {
       // Suppress the redundant sessionKey bump that would come from the
       // onCwdChange effect firing after setSelectedCwd in the sidebar
@@ -367,7 +478,7 @@ export function AppShell() {
     if (!isRestore) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [router, isMobile]);
+  }, [dismissWorkspaceLayer, router, usesOverlayLayout]);
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
     setSelectedSession(null);
@@ -377,9 +488,9 @@ export function AppShell() {
     setBranchActiveLeafId(null);
     setSystemPrompt(null);
     setActiveTopPanel(null);
-    if (isMobile) setSidebarOpen(false);
+    if (usesOverlayLayout) dismissWorkspaceLayer();
     router.replace("/", { scroll: false });
-  }, [router, isMobile]);
+  }, [dismissWorkspaceLayer, router, usesOverlayLayout]);
 
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectRoot, which the same-project check in
@@ -441,6 +552,26 @@ export function AppShell() {
     }
   }, [selectedSession, router]);
 
+  const revealInspector = useCallback(() => {
+    setActiveTopPanel(null);
+    if (usesOverlayLayout) openWorkspaceLayer("inspector");
+    else setRightPanelOpen(true);
+  }, [openWorkspaceLayer, usesOverlayLayout]);
+
+  const hideInspector = useCallback(() => {
+    if (usesOverlayLayout) closeWorkspaceLayer();
+    else setRightPanelOpen(false);
+  }, [closeWorkspaceLayer, usesOverlayLayout]);
+
+  const toggleInspector = useCallback(() => {
+    setActiveTopPanel(null);
+    if (rightPanelOpen) hideInspector();
+    else {
+      if (!activeFileTabId) setRightPanelView("changes");
+      revealInspector();
+    }
+  }, [activeFileTabId, hideInspector, revealInspector, rightPanelOpen]);
+
   const handleOpenFile = useCallback((filePath: string, fileName: string, sourceSessionId?: string | null) => {
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => {
@@ -451,10 +582,19 @@ export function AppShell() {
     });
     setActiveFileTabId(tabId);
     setRightPanelView("file");
-    setRightPanelOpen(true);
-    // On mobile the file panel is full-screen; close the drawer so it shows.
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+    revealInspector();
+  }, [revealInspector]);
+
+  const handleSelectFileTab = useCallback((tabId: string) => {
+    setActiveFileTabId(tabId);
+    setRightPanelView("file");
+    revealInspector();
+  }, [revealInspector]);
+
+  const handleSelectInspectorFile = useCallback((tabId: string) => {
+    setActiveFileTabId(tabId);
+    setRightPanelView("file");
+  }, []);
 
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
@@ -475,15 +615,22 @@ export function AppShell() {
 
   const handleOpenChanges = useCallback(() => {
     setRightPanelView("changes");
-    setRightPanelOpen(true);
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+    revealInspector();
+  }, [revealInspector]);
 
   const handleOpenTerminal = useCallback(() => {
     setRightPanelView("terminal");
-    setRightPanelOpen(true);
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+    revealInspector();
+  }, [revealInspector]);
+
+  const handleOpenPreview = useCallback(() => {
+    const tabId = activeFileTabId ?? fileTabs[0]?.id ?? null;
+    if (tabId) handleSelectFileTab(tabId);
+    else {
+      setRightPanelView("file");
+      revealInspector();
+    }
+  }, [activeFileTabId, fileTabs, handleSelectFileTab, revealInspector]);
 
   const handleExportSession = useCallback(() => {
     if (!selectedSession) return;
@@ -496,7 +643,7 @@ export function AppShell() {
         openSessionStatsPanel();
         break;
       case "openBranchNavigator":
-        if (isMobile) setSidebarOpen(false);
+        if (usesOverlayLayout) dismissWorkspaceLayer();
         setActiveTopPanel("branches");
         break;
       case "openForkSelector":
@@ -520,10 +667,11 @@ export function AppShell() {
       }
       case "openSessionSidebar":
         setActiveTopPanel(null);
-        setSidebarOpen(true);
+        if (usesOverlayLayout) openWorkspaceLayer("sessions");
+        else setSidebarOpen(true);
         break;
     }
-  }, [activeCwd, handleNewSession, isMobile, newSessionCwd, openSessionStatsPanel, selectedSession?.cwd]);
+  }, [activeCwd, dismissWorkspaceLayer, handleNewSession, newSessionCwd, openSessionStatsPanel, openWorkspaceLayer, selectedSession?.cwd, usesOverlayLayout]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -539,6 +687,7 @@ export function AppShell() {
       ? `cwd:${gitChangesCwd}`
       : null;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: explorerRefreshKey intentionally refreshes the Git summary.
   useEffect(() => {
     let cancelled = false;
     if (!gitChangesCwd) {
@@ -560,8 +709,72 @@ export function AppShell() {
     return () => { cancelled = true; };
   }, [gitChangesCwd, explorerRefreshKey]);
 
+  const hasWorkspace = Boolean(gitChangesCwd);
+  const compactNumber = (value: number) => value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `${(value / 1_000).toFixed(0)}k`
+      : String(value);
+  const statsTokens = sessionStats?.tokens;
+  const statsCost = sessionStats?.cost ?? 0;
+  const statsCostLabel = statsCost > 0 ? (statsCost >= 0.01 ? `$${statsCost.toFixed(2)}` : "<$0.01") : null;
+  const contextPercent = contextUsage?.percent ?? null;
+  const contextLabel = contextUsage?.contextWindow
+    ? `${contextPercent !== null ? contextPercent.toFixed(0) : "?"}% / ${compactNumber(contextUsage.contextWindow)}`
+    : null;
+  const contextLevel = contextPercent !== null && contextPercent > 90
+    ? "danger"
+    : contextPercent !== null && contextPercent > 70
+      ? "warning"
+      : "normal";
+  const statsTooltip = [
+    ...(statsTokens ? [
+      `in: ${statsTokens.input.toLocaleString()}`,
+      `out: ${statsTokens.output.toLocaleString()}`,
+      `cache read: ${statsTokens.cacheRead.toLocaleString()}`,
+      `cache write: ${statsTokens.cacheWrite.toLocaleString()}`,
+    ] : []),
+    ...(statsCost > 0 ? [`cost: $${statsCost.toFixed(4)}`] : []),
+    ...(contextUsage?.contextWindow ? [`context: ${contextPercent !== null ? `${contextPercent.toFixed(1)}%` : "unknown"} of ${contextUsage.contextWindow.toLocaleString()} tokens`] : []),
+  ].join("  |  ");
+  const currentSessionTitle = selectedSession
+    ? selectedSession.name || selectedSession.firstMessage?.slice(0, 64) || `Session ${selectedSession.id.slice(0, 8)}`
+    : effectiveNewSessionCwd
+      ? "New session"
+      : activeCwd
+        ? "Project selected"
+        : appSettings.displayName;
+  const currentSessionMeta = selectedSession
+    ? `${selectedSession.messageCount} messages · ${selectedSession.id.slice(0, 8)}`
+    : effectiveNewSessionCwd
+      ? "Ready for the first message"
+      : activeCwd
+        ? "Choose a session"
+        : "Choose a project";
+
+  const runMoreAction = (action: () => void) => {
+    dismissWorkspaceLayer();
+    action();
+  };
+  const mobileMoreActions: MobileMoreActions = {
+    newSession: () => {
+      const cwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
+      if (cwd) runMoreAction(() => handleNewSession("", cwd));
+    },
+    exportSession: () => runMoreAction(handleExportSession),
+    branches: () => runMoreAction(() => setActiveTopPanel("branches")),
+    systemPrompt: () => runMoreAction(() => setActiveTopPanel("system")),
+    models: () => runMoreAction(() => setModelsConfigOpen(true)),
+    skills: () => runMoreAction(() => setSkillsConfigOpen(true)),
+    plugins: () => runMoreAction(() => setPluginsConfigOpen(true)),
+    settings: () => runMoreAction(() => setSettingsOpen(true)),
+    projectTrust: () => runMoreAction(() => setProjectTrustOpen(true)),
+    hotkeys: () => runMoreAction(() => setHotkeysOpen(true)),
+    theme: () => runMoreAction(() => toggleTheme()),
+  };
+
   const sidebarContent = (
-    <>
+    <div className={styles.sidebarInner}>
       <SessionSidebar
         appName={appSettings.displayName}
         selectedSessionId={selectedSession?.id ?? null}
@@ -576,925 +789,378 @@ export function AppShell() {
         onOpenFile={handleOpenFile}
         explorerRefreshKey={explorerRefreshKey}
         onAtMention={handleAtMention}
-        onRequestClose={isMobile ? handleSidebarClose : undefined}
+        onRequestClose={usesOverlayLayout ? handleSidebarClose : undefined}
       />
-      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
-        {([
-          {
-            label: "Models",
-            onClick: () => setModelsConfigOpen(true),
-            disabled: false,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" />
-                <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
-                <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
-                <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
-                <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
-              </svg>
-            ),
-          },
-          {
-            label: "Skills",
-            onClick: () => setSkillsConfigOpen(true),
-            disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
-            ),
-          },
-          {
-            label: "Plugins",
-            onClick: () => setPluginsConfigOpen(true),
-            disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 7V2" />
-                <path d="M15 7V2" />
-                <path d="M6 13V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5a6 6 0 0 1-12 0Z" />
-                <path d="M12 19v3" />
-              </svg>
-            ),
-          },
-          {
-            label: "Settings",
-            onClick: () => setSettingsOpen(true),
-            disabled: false,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <title>Settings</title>
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            ),
-          },
-        ] as { label: string; onClick: () => void; disabled: boolean; icon: React.ReactNode }[]).map(({ label, onClick, disabled, icon }) => (
-          <button
-            type="button"
-            key={label}
-            onClick={onClick}
-            disabled={disabled}
-            title={label}
-            style={{
-              flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-              height: 32, padding: "0 2px", background: "none", border: "none",
-              borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
-              fontSize: 12, opacity: disabled ? 0.35 : 1,
-              transition: "background 0.12s, color 0.12s",
-            }}
-            onMouseEnter={(e) => { if (!disabled) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; } }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {icon}
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-          </button>
-        ))}
-      </div>
-    </>
+      <nav className={styles.sidebarActions} aria-label="Configuration">
+        <button type="button" className={styles.sidebarAction} onClick={() => setModelsConfigOpen(true)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /></svg>
+          <span>Models</span>
+        </button>
+        <button type="button" className={styles.sidebarAction} onClick={() => setSkillsConfigOpen(true)} disabled={!hasWorkspace}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5Z" /><path d="m2 17 10 5 10-5" /><path d="m2 12 10 5 10-5" /></svg>
+          <span>Skills</span>
+        </button>
+        <button type="button" className={styles.sidebarAction} onClick={() => setPluginsConfigOpen(true)} disabled={!hasWorkspace}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7V2" /><path d="M15 7V2" /><path d="M6 13V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5a6 6 0 0 1-12 0Z" /><path d="M12 19v3" /></svg>
+          <span>Plugins</span>
+        </button>
+        <button type="button" className={styles.sidebarAction} onClick={() => setSettingsOpen(true)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 5 8.6a1.7 1.7 0 0 0-.34-1.88L4.6 6.66l2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 5a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.12.37.34.7.6 1 .3.3.7.44 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7.6Z" /></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+    </div>
   );
 
   return (
     <>
-    <style>{`
-      @keyframes session-info-pop {
-        0% {
-          opacity: 0;
-          transform: translateY(-24px);
-          filter: blur(6px);
-          box-shadow: 0 2px 8px rgba(0,0,0,0);
-        }
-        55% {
-          opacity: 1;
-          transform: translateY(0);
-          filter: blur(0);
-          background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
-          box-shadow: 0 18px 44px rgba(37,99,235,0.16);
-        }
-        100% {
-          opacity: 1;
-          transform: translateY(0);
-          filter: blur(0);
-          background: var(--bg-panel);
-          box-shadow: 0 10px 28px rgba(0,0,0,0.10);
-        }
-      }
-      @keyframes session-info-light-wash {
-        0% {
-          opacity: 0;
-          transform: translateX(-110%) skewX(-16deg);
-        }
-        24% {
-          opacity: 0.42;
-        }
-        100% {
-          opacity: 0;
-          transform: translateX(115%) skewX(-16deg);
-        }
-      }
-      .session-info-popover {
-        position: relative;
-        overflow: hidden;
-        transform-origin: top right;
-        animation: session-info-pop 360ms ease-out both;
-        will-change: transform, opacity, filter, background, box-shadow;
-      }
-      .session-info-popover::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        left: 0;
-        width: 44%;
-        pointer-events: none;
-        background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 24%, transparent), transparent);
-        animation: session-info-light-wash 620ms ease-out both;
-      }
-      .panel-resize-handle {
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        z-index: 20;
-        width: 8px !important;
-        min-width: 8px !important;
-        cursor: col-resize;
-        touch-action: none;
-        background: transparent;
-        transition: background 0.12s ease;
-      }
-      .panel-resize-handle:hover,
-      .panel-resize-handle.active {
-        background: color-mix(in srgb, var(--accent) 18%, transparent);
-      }
-      .sidebar-resize-handle {
-        right: 0;
-      }
-      .right-panel-resize-handle {
-        left: 0;
-      }
-      @media (max-width: 640px) {
-        .panel-resize-handle {
-          display: none;
-        }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .session-info-popover,
-        .session-info-popover::after {
-          animation: none;
-        }
-      }
-      @media (max-width: 640px) {
-        .sidebar-overlay-backdrop.sidebar-mobile-pending {
-          opacity: 0 !important;
-          pointer-events: none !important;
-        }
-        .sidebar-container.sidebar-mobile-pending.sidebar-open {
-          transform: translateX(-100%);
-          box-shadow: none;
-        }
-      }
-    `}</style>
-    <div style={{ position: "relative", display: "flex", height: "100dvh", paddingTop: "var(--pi-safe-area-top)", overflow: "hidden", background: "var(--bg)" }}>
-      <div
-        aria-hidden="true"
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: "var(--pi-safe-area-top)",
-          background: "var(--bg-panel)",
-          zIndex: 0,
-          pointerEvents: "none",
-        }}
-      />
-      {/* Mobile overlay backdrop */}
-      <div
-        className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
-        onClick={handleSidebarClose}
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: isMobile ? 899 : 199,
-          background: "rgba(0,0,0,0.4)",
-          opacity: sidebarOpen ? 1 : 0,
-          pointerEvents: sidebarOpen ? "auto" : "none",
-          transition: "opacity 0.25s ease",
-        }}
-      />
+      <div className={styles.shell}>
+        <div className={styles.safeAreaFill} aria-hidden="true" />
+        <button
+          type="button"
+          className={styles.layerBackdrop}
+          data-open={usesOverlayLayout && (sidebarOpen || rightPanelOpen) || undefined}
+          aria-label="Close workspace layer"
+          tabIndex={usesOverlayLayout && (sidebarOpen || rightPanelOpen) ? 0 : -1}
+          onClick={closeWorkspaceLayer}
+        />
 
-      {/* Left sidebar */}
-      <div
-        className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${resizingPanel === "sidebar" ? " sidebar-resizing" : ""}`}
-        style={{
-          "--sidebar-width": `${sidebarWidth}px`,
-          background: "var(--bg-panel)",
-          borderRight: "1px solid var(--border)",
-          display: "flex",
-          flexDirection: "column",
-          flexShrink: 0,
-          zIndex: isMobile ? 900 : 200,
-        } as CSSProperties}
-      >
-        {sidebarContent}
-        {sidebarOpen && !isMobile && (
-          <div
-            className={`panel-resize-handle sidebar-resize-handle${resizingPanel === "sidebar" ? " active" : ""}`}
-            onPointerDown={startSidebarResize}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            title="Resize sidebar"
-          />
-        )}
-      </div>
-
-      {/* Center: chat */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-        {/* Top bar with sidebar toggle */}
-        <div ref={topBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, borderBottom: "1px solid var(--border)", height: 36, background: "var(--bg-panel)" }}>
-          <button
-            onClick={handleSidebarToggle}
-            title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 36, height: 36, padding: 0,
-              background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {sidebarOpen ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
-              </svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
-              </svg>
-            )}
-          </button>
-          <button
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-            }}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={isDark}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 36, height: 36, padding: 0,
-              background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {isDark ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
-          </button>
-          {showChat && (
-            <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
-              <button
-                onClick={handleExportSession}
-                disabled={!selectedSession}
-                title={selectedSession ? "Export HTML" : "Export is available after the session is saved"}
-                aria-label="Export HTML"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  height: "100%",
-                  padding: "0 12px",
-                  background: "none",
-                  border: "none",
-                  borderTop: "2px solid transparent",
-                  borderRight: "1px solid var(--border)",
-                  color: selectedSession ? "var(--text-muted)" : "var(--text-dim)",
-                  cursor: selectedSession ? "pointer" : "not-allowed",
-                  opacity: selectedSession ? 1 : 0.45,
-                  flexShrink: 0,
-                  fontSize: 11,
-                  whiteSpace: "nowrap",
-                  transition: "color 0.1s, background 0.1s, opacity 0.1s",
-                }}
-                onMouseEnter={(e) => {
-                  if (!selectedSession) return;
-                  e.currentTarget.style.color = "var(--text)";
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = selectedSession ? "var(--text-muted)" : "var(--text-dim)";
-                  e.currentTarget.style.background = "none";
-                }}
-              >
-                <span style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 18,
-                  height: 18,
-                  borderRadius: 5,
-                  background: "transparent",
-                  color: selectedSession ? "var(--text-muted)" : "var(--text-dim)",
-                  flexShrink: 0,
-                }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </span>
-                {!isMobile && <span>Export</span>}
-              </button>
-              <BranchNavigator
-                tree={branchTree}
-                activeLeafId={branchActiveLeafId}
-                onLeafChange={handleBranchLeafChange}
-                inline
-                compact={isMobile}
-                containerRef={topBarRef}
-                open={activeTopPanel === "branches"}
-                onToggle={() => toggleTopPanel("branches")}
-                hasSession
-              />
-              <button
-                ref={systemBtnRef}
-                onClick={() => toggleTopPanel("system")}
-                title="System prompt"
-                aria-label="System prompt"
-                aria-pressed={activeTopPanel === "system"}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  height: "100%", padding: "0 12px",
-                  background: activeTopPanel === "system" ? "var(--bg-selected)" : "none",
-                  border: "none",
-                  borderTop: activeTopPanel === "system" ? "2px solid var(--accent)" : "2px solid transparent",
-                  borderRight: "1px solid var(--border)",
-                  cursor: "pointer",
-                  color: activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)",
-                  fontSize: 11, whiteSpace: "nowrap", transition: "color 0.1s, background 0.1s",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)"; }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: systemPrompt ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }}>
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="8" y1="13" x2="16" y2="13" />
-                  <line x1="8" y1="17" x2="13" y2="17" />
-                </svg>
-                {!isMobile && <span>System</span>}
-              </button>
-            </div>
+        <aside
+          ref={sidebarPanelRef}
+          className={styles.sidebar}
+          data-open={sidebarOpen}
+          data-pending={!mobileSidebarReady || undefined}
+          data-resizing={resizingPanel === "sidebar" || undefined}
+          style={{ "--shell-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+          aria-label="Sessions and files"
+          aria-hidden={!sidebarOpen}
+          inert={!sidebarOpen}
+        >
+          {sidebarContent}
+          {sidebarOpen && !usesOverlayLayout && (
+            <hr
+              className={`${styles.resizeHandle} ${styles.sidebarResizeHandle}`}
+              data-active={resizingPanel === "sidebar" || undefined}
+              onPointerDown={startSidebarResize}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault();
+                  const delta = event.key === "ArrowRight" ? 16 : -16;
+                  setSidebarWidth((width) => clampWidth(width + delta, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+                }
+              }}
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-valuemin={SIDEBAR_MIN_WIDTH}
+              aria-valuemax={getSidebarMaxWidth()}
+              aria-valuenow={sidebarWidth}
+              aria-label="Resize sidebar"
+              title="Resize sidebar"
+            />
           )}
-          {/* Session stats — right-aligned in top bar */}
-          {showChat && (sessionStats || contextUsage) && (() => {
-            const t = sessionStats?.tokens;
-            const c = sessionStats?.cost ?? 0;
-            const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
-            const costStr = c > 0 ? (c >= 0.01 ? `$${c.toFixed(2)}` : `<$0.01`) : null;
+        </aside>
 
-            let ctxColor = "var(--text-muted)";
-            let ctxStr: string | null = null;
-            if (contextUsage?.contextWindow) {
-              const pct = contextUsage.percent;
-              if (pct !== null && pct > 90) ctxColor = "#ef4444";
-              else if (pct !== null && pct > 70) ctxColor = "rgba(234,179,8,0.95)";
-              ctxStr = pct !== null ? `${pct.toFixed(0)}% / ${fmt(contextUsage.contextWindow)}` : `? / ${fmt(contextUsage.contextWindow)}`;
-            }
-
-            const tooltipParts: string[] = [];
-            if (t) {
-              tooltipParts.push(`in: ${t.input.toLocaleString()}`);
-              tooltipParts.push(`out: ${t.output.toLocaleString()}`);
-              tooltipParts.push(`cache read: ${t.cacheRead.toLocaleString()}`);
-              tooltipParts.push(`cache write: ${t.cacheWrite.toLocaleString()}`);
-              if (c > 0) tooltipParts.push(`cost: $${c.toFixed(4)}`);
-            }
-            if (contextUsage?.contextWindow) {
-              const pct = contextUsage.percent;
-              tooltipParts.push(`context: ${pct !== null ? pct.toFixed(1) + "%" : "unknown"} of ${contextUsage.contextWindow.toLocaleString()} tokens`);
-            }
-            const tooltip = tooltipParts.join("  |  ");
-
-            return (
-              <button
-                type="button"
-                onClick={() => toggleTopPanel("session")}
-                title={tooltip || "Session info"}
-                aria-label="Session info"
-                aria-pressed={activeTopPanel === "session"}
-                style={{
-                  marginLeft: "auto",
-                  display: "flex", alignItems: "center", gap: 10,
-                  paddingLeft: 12,
-                  paddingRight: rightPanelOpen ? 12 : 48,
-                  height: "100%",
-                  background: activeTopPanel === "session" ? "var(--bg-selected)" : "none",
-                  border: "none",
-                  borderTop: activeTopPanel === "session" ? "2px solid var(--accent)" : "2px solid transparent",
-                  fontSize: 11, color: "var(--text-muted)",
-                  whiteSpace: "nowrap", cursor: "pointer",
-                  fontVariantNumeric: "tabular-nums",
-                  transition: "color 0.1s, background 0.1s",
+        <main
+          className={styles.center}
+          aria-hidden={usesOverlayLayout && (sidebarOpen || rightPanelOpen) || undefined}
+          inert={usesOverlayLayout && (sidebarOpen || rightPanelOpen)}
+        >
+          <header ref={topBarRef} className={styles.topBar}>
+            <div className={styles.desktopChrome}>
+              <IconButton label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} selected={sidebarOpen} className={styles.topIcon} onClick={handleSidebarToggle}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" /></svg>
+              </IconButton>
+              <IconButton
+                label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                className={styles.topIcon}
+                aria-pressed={isDark}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = activeTopPanel === "session" ? "var(--text)" : "var(--text-muted)"; }}
               >
-                {isMobile && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
-                  </svg>
+                {isDark ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" /></svg>
                 )}
-                {!isMobile && t && t.input > 0 && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
-                    </svg>
-                    {fmt(t.input)}
-                  </span>
-                )}
-                {!isMobile && t && t.output > 0 && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
-                    </svg>
-                    {fmt(t.output)}
-                  </span>
-                )}
-                {!isMobile && t && t.cacheRead > 0 && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M8.5 5a3.5 3.5 0 1 1-1-2.45" /><polyline points="6.5 1.5 8.5 2.5 7.5 4.5" />
-                    </svg>
-                    {fmt(t.cacheRead)}
-                  </span>
-                )}
-                {!isMobile && costStr && (
-                  <span style={{ display: "flex", alignItems: "center", color: "var(--text)", fontWeight: 500 }}>
-                    {costStr}
-                  </span>
-                )}
-                {ctxStr && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, color: ctxColor }}>
-                    <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M1 9 L1 5 Q1 1 5 1 Q9 1 9 5 L9 9" /><line x1="1" y1="9" x2="9" y2="9" />
-                    </svg>
-                    {ctxStr}
-                  </span>
-                )}
+              </IconButton>
+              {showChat && (
+                <>
+                  <button type="button" className={styles.topTool} onClick={handleExportSession} disabled={!selectedSession} title={selectedSession ? "Export HTML" : "Export is available after the session is saved"}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                    Export
+                  </button>
+                  <BranchNavigator
+                    tree={branchTree}
+                    activeLeafId={branchActiveLeafId}
+                    onLeafChange={handleBranchLeafChange}
+                    inline
+                    containerRef={topBarRef}
+                    open={activeTopPanel === "branches"}
+                    onToggle={() => toggleTopPanel("branches")}
+                    hasSession
+                  />
+                  <button type="button" className={styles.topTool} onClick={() => toggleTopPanel("system")} aria-pressed={activeTopPanel === "system"} title="System prompt">
+                    <svg className={styles.systemIcon} data-loaded={systemPrompt !== null || undefined} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><polyline points="14 2 14 8 20 8" /><line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="13" y2="17" /></svg>
+                    System
+                  </button>
+                </>
+              )}
+              {showChat && (sessionStats || contextUsage) && (
+                <button type="button" className={styles.statsButton} onClick={() => toggleTopPanel("session")} title={statsTooltip || "Session info"} aria-label="Session info" aria-pressed={activeTopPanel === "session"}>
+                  {statsTokens && statsTokens.input > 0 && <span className={styles.statsMetric}>↑ {compactNumber(statsTokens.input)}</span>}
+                  {statsTokens && statsTokens.output > 0 && <span className={styles.statsMetric}>↓ {compactNumber(statsTokens.output)}</span>}
+                  {statsTokens && statsTokens.cacheRead > 0 && <span className={styles.statsMetric}>↻ {compactNumber(statsTokens.cacheRead)}</span>}
+                  {statsCostLabel && <span className={styles.statsCost}>{statsCostLabel}</span>}
+                  {contextLabel && <span className={`${styles.statsMetric} ${styles.statsContext}`} data-level={contextLevel}>◴ {contextLabel}</span>}
+                </button>
+              )}
+              <IconButton label={rightPanelOpen ? "Hide inspector" : "Show inspector"} selected={rightPanelOpen} className={`${styles.topIcon} ${styles.inspectorToggle}`} onClick={toggleInspector}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+              </IconButton>
+            </div>
+
+            <div className={styles.compactChrome}>
+              <button type="button" className={styles.compactNavButton} aria-pressed={sidebarOpen} onClick={handleSidebarToggle}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" /></svg>
+                <span>Sessions</span>
               </button>
-            );
-          })()}
-          {/* Top panel dropdown — shared, only one active at a time */}
-          {activeTopPanel && topPanelPos && (
-            <div style={{
-              position: "fixed",
-              top: topPanelPos.top,
-              left: topPanelPos.left,
-              width: topPanelPos.width,
-              maxHeight: `calc(100dvh - ${topPanelPos.top}px)`,
-              overflowY: "auto",
-              zIndex: 500,
-            }}>
+              <button type="button" className={styles.currentSession} onClick={showChat ? openSessionStatsPanel : handleSidebarToggle}>
+                <span className={styles.currentSessionTitle}>{currentSessionTitle}</span>
+                <span className={styles.currentSessionMeta}>{currentSessionMeta}</span>
+              </button>
+              <button type="button" className={styles.compactNavButton} aria-pressed={rightPanelOpen} onClick={toggleInspector}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+                <span>Inspector</span>
+              </button>
+              <button type="button" className={styles.compactNavButton} aria-pressed={mobileMoreOpen} onClick={() => { setActiveTopPanel(null); openWorkspaceLayer("more"); }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+                <span>More</span>
+              </button>
+              <div className={styles.branchHost} aria-hidden="true">
+                <BranchNavigator
+                  tree={branchTree}
+                  activeLeafId={branchActiveLeafId}
+                  onLeafChange={handleBranchLeafChange}
+                  inline
+                  compact
+                  containerRef={topBarRef}
+                  open={activeTopPanel === "branches"}
+                  onToggle={() => toggleTopPanel("branches")}
+                  hasSession
+                />
+              </div>
+            </div>
+          </header>
+
+          {activeTopPanel && activeTopPanel !== "branches" && topPanelPos && (
+            <div
+              className={styles.topPanelHost}
+              style={{
+                "--panel-top": `${topPanelPos.top}px`,
+                top: topPanelPos.top,
+                ...(usesOverlayLayout ? {} : { left: topPanelPos.left, width: topPanelPos.width }),
+              } as CSSProperties}
+            >
               {activeTopPanel === "system" && (
-                <div style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                }}>
+                <section className={styles.topPanel} aria-label="System prompt">
                   {systemPrompt ? (
-                    <div style={{
-                      maxHeight: "min(600px, 75vh)",
-                      overflowY: "auto",
-                      padding: "12px 16px",
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--font-mono)",
-                    }}>
-                      {systemPrompt}
-                    </div>
+                    <div className={styles.systemPrompt}>{systemPrompt}</div>
                   ) : systemPrompt === "" ? (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      System prompt is empty (tools are disabled)
-                    </div>
+                    <div className={styles.panelEmpty}>System prompt is empty because tools are disabled.</div>
                   ) : (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Send a message to load the system prompt
-                    </div>
+                    <div className={styles.panelEmpty}>Send a message to load the system prompt.</div>
                   )}
-                </div>
+                </section>
               )}
               {activeTopPanel === "session" && (
-                <div className="session-info-popover" style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                  boxShadow: "0 10px 28px rgba(0,0,0,0.10)",
-                  padding: "12px 16px",
-                }}>
-                  {sessionStats ? (() => {
-                    const sessionRows = [
-                      ...(sessionStats.sessionName ? [{ label: "Name", value: sessionStats.sessionName, copyField: null }] : []),
-                      { label: "File", value: sessionStats.sessionFile ?? "In-memory", copyField: "file" as const },
-                      { label: "ID", value: sessionStats.sessionId, copyField: "id" as const },
-                    ];
-                    const messageRows = [
-                      ["User", sessionStats.userMessages.toLocaleString()],
-                      ["Assistant", sessionStats.assistantMessages.toLocaleString()],
-                      ["Tool Calls", sessionStats.toolCalls.toLocaleString()],
-                      ["Tool Results", sessionStats.toolResults.toLocaleString()],
-                      ["Total", sessionStats.totalMessages.toLocaleString()],
-                    ];
-                    const tokenRows = [
-                      ["Input", sessionStats.tokens.input.toLocaleString()],
-                      ["Output", sessionStats.tokens.output.toLocaleString()],
-                      ...(sessionStats.tokens.cacheRead > 0 ? [["Cache Read", sessionStats.tokens.cacheRead.toLocaleString()]] : []),
-                      ...(sessionStats.tokens.cacheWrite > 0 ? [["Cache Write", sessionStats.tokens.cacheWrite.toLocaleString()]] : []),
-                      ["Total", sessionStats.tokens.total.toLocaleString()],
-                    ];
-                    const ctx = contextUsage ?? sessionStats.contextUsage;
-                    const formatCompact = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
-                    const extraTokenRows = [
-                      ...(sessionStats.cost > 0 ? [["Cost", `$${sessionStats.cost.toFixed(4)}`]] : []),
-                      ...(ctx?.contextWindow ? [["Context", `${ctx.percent !== null ? `${ctx.percent.toFixed(1)}%` : "?"} / ${formatCompact(ctx.contextWindow)}`]] : []),
-                    ];
-                    const section = (
-                      title: string,
-                      sectionRows: string[][],
-                      valueAlign: "left" | "right" = "left",
-                      compact = false,
-                    ) => (
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>{title}</div>
-                          <div style={{
-                            display: "grid",
-                            gridTemplateColumns: compact ? "max-content max-content" : "auto minmax(0, 1fr)",
-                            columnGap: compact ? 14 : 12,
-                            rowGap: 4,
-                            justifyContent: compact ? "start" : undefined,
-                          }}>
-                            {sectionRows.map(([label, value]) => (
-                              <div key={`${title}:${label}`} style={{ display: "contents" }}>
-                                <div style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}>{label}</div>
-                                <div style={{
-                                  color: "var(--text-muted)",
-                                  minWidth: 0,
-                                  overflowWrap: compact ? "normal" : "anywhere",
-                                  textAlign: valueAlign,
-                                  whiteSpace: valueAlign === "right" ? "nowrap" : "normal",
-                                }}>{value}</div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    const copyButton = (field: SessionCopyField, value: string) => {
-                      const copied = copiedSessionField === field;
-                      return (
-                        <button
-                          type="button"
-                          title={copied ? "Copied" : `Copy ${field === "file" ? "file path" : "session ID"}`}
-                          onClick={() => handleCopySessionField(field, value)}
-                          style={{
-                            alignSelf: "start",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 22,
-                            height: 22,
-                            marginTop: -2,
-                            color: copied ? "var(--accent)" : "var(--text-dim)",
-                            background: "transparent",
-                            border: "1px solid var(--border)",
-                            borderRadius: 4,
-                            cursor: "pointer",
-                            flex: "0 0 auto",
-                            transition: "color 0.12s, border-color 0.12s, background 0.12s",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "var(--accent)";
-                            e.currentTarget.style.borderColor = "var(--accent)";
-                            e.currentTarget.style.background = "var(--bg-hover)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.color = copied ? "var(--accent)" : "var(--text-dim)";
-                            e.currentTarget.style.borderColor = "var(--border)";
-                            e.currentTarget.style.background = "transparent";
-                          }}
-                        >
-                          {copied ? (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          ) : (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                          )}
-                        </button>
-                      );
-                    };
-                    const sessionInfoSection = (
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>Session Info</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", columnGap: 12, rowGap: 8, alignItems: "start" }}>
-                          {sessionRows.map((row) => (
-                            <div key={`session-info:${row.label}`} style={{ display: "contents" }}>
-                              <div style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}>{row.label}</div>
-                              <div style={{
-                                color: "var(--text-muted)",
-                                minWidth: 0,
-                                overflowWrap: "anywhere",
-                                wordBreak: "break-word",
-                                whiteSpace: "normal",
-                              }}>{row.value}</div>
-                              <div>{row.copyField ? copyButton(row.copyField, row.value) : null}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-
-                    return (
-                      <div style={{
-                        display: "grid",
-                        gridTemplateColumns: isMobile
-                          ? "1fr"
-                          : "minmax(360px, 1.7fr) minmax(140px, 0.55fr) minmax(190px, 0.75fr)",
-                        gap: isMobile ? 16 : 24,
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        fontFamily: "var(--font-mono)",
-                      }}>
-                        {sessionInfoSection}
-                        {section("Messages", messageRows)}
-                        {section("Tokens", [...tokenRows, ...extraTokenRows], "right", true)}
-                      </div>
-                    );
-                  })() : (
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Send a message or run /session to load session info
-                    </div>
-                  )}
-                </div>
+                <section className={styles.topPanel} aria-label="Session info">
+                  <SessionInfoPanel sessionStats={sessionStats} contextUsage={contextUsage} copiedField={copiedSessionField} onCopy={handleCopySessionField} />
+                </section>
               )}
             </div>
           )}
 
-        </div>
-
-        {/* Chat content */}
-        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          {showChat ? (
-            <ChatWindow
-              key={sessionKey}
-              appName={appSettings.displayName}
-              session={selectedSession}
-              newSessionCwd={effectiveNewSessionCwd}
-              onAgentEnd={handleAgentEnd}
-              onSessionCreated={handleSessionCreated}
-              onSessionForked={handleSessionForked}
-              modelsRefreshKey={modelsRefreshKey}
-              chatInputRef={chatInputRef}
-              onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onSessionStatsPanelOpen={openSessionStatsPanel}
-              onSlashUiAction={handleSlashUiAction}
-              onContextUsageChange={handleContextUsageChange}
-              onOpenFile={handleOpenLinkedFile}
-            />
-          ) : showPlaceholder ? (
-            activeCwd ? (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-                Select a session from the sidebar
-              </div>
-            ) : (
-              <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
-                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
-                  <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
-                </svg>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Get Started</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>Select a project directory from the sidebar<br />
-                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>Add models via the <strong style={{ color: "var(--text)" }}>Models</strong> button at the bottom
+          <div className={styles.chatContent}>
+            {showChat ? (
+              <ChatWindow
+                key={sessionKey}
+                appName={appSettings.displayName}
+                session={selectedSession}
+                newSessionCwd={effectiveNewSessionCwd}
+                onAgentEnd={handleAgentEnd}
+                onSessionCreated={handleSessionCreated}
+                onSessionForked={handleSessionForked}
+                modelsRefreshKey={modelsRefreshKey}
+                chatInputRef={chatInputRef}
+                onBranchDataChange={handleBranchDataChange}
+                onSystemPromptChange={handleSystemPromptChange}
+                onSessionStatsChange={handleSessionStatsChange}
+                onSessionStatsPanelOpen={openSessionStatsPanel}
+                onSlashUiAction={handleSlashUiAction}
+                onContextUsageChange={handleContextUsageChange}
+                onOpenFile={handleOpenLinkedFile}
+                onRetry={() => setSessionKey((key) => key + 1)}
+              />
+            ) : showPlaceholder ? (
+              <div className={styles.placeholder}>
+                <section className={styles.placeholderCard}>
+                  <span className={styles.placeholderEyebrow}>{activeCwd ? "Workspace ready" : "Start here"}</span>
+                  <h1 className={styles.placeholderTitle}>{activeCwd ? "Choose a session" : "Open a project"}</h1>
+                  <p className={styles.placeholderCopy}>
+                    {activeCwd
+                      ? "Continue an existing session or start a clean one in the selected project."
+                      : "Sessions, project files, and worktrees are available from the workspace navigator."}
+                  </p>
+                  {!activeCwd && (
+                    <ol className={styles.placeholderSteps}><li>Open Sessions and choose a project directory.</li><li>Configure a model, then start the first message.</li></ol>
+                  )}
+                  <div className={styles.placeholderActions}>
+                    <Button variant="primary" size={usesOverlayLayout ? "touch" : "default"} onClick={() => usesOverlayLayout ? openWorkspaceLayer("sessions") : setSidebarOpen(true)}>Open Sessions</Button>
+                    {activeCwd && <Button size={usesOverlayLayout ? "touch" : "default"} onClick={() => handleNewSession("", activeCwd)}>New session</Button>}
                   </div>
+                </section>
+              </div>
+            ) : null}
+          </div>
+        </main>
+
+        <aside
+          ref={inspectorPanelRef}
+          className={styles.inspector}
+          data-open={rightPanelOpen}
+          data-resizing={resizingPanel === "right" || undefined}
+          style={{ "--shell-inspector-width": `${rightPanelWidth}px` } as CSSProperties}
+          aria-label="Inspector"
+          aria-hidden={!rightPanelOpen}
+          inert={!rightPanelOpen}
+        >
+          <div className={styles.inspectorInner}>
+            {rightPanelOpen && !usesOverlayLayout && (
+              <hr
+                className={`${styles.resizeHandle} ${styles.inspectorResizeHandle}`}
+                data-active={resizingPanel === "right" || undefined}
+                onPointerDown={startRightPanelResize}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                    event.preventDefault();
+                    const delta = event.key === "ArrowLeft" ? 16 : -16;
+                    setRightPanelWidth((width) => clampWidth(width + delta, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+                  }
+                }}
+                tabIndex={0}
+                aria-orientation="vertical"
+                aria-valuemin={RIGHT_PANEL_MIN_WIDTH}
+                aria-valuemax={getRightPanelMaxWidth()}
+                aria-valuenow={rightPanelWidth}
+                aria-label="Resize inspector"
+                title="Resize inspector"
+              />
+            )}
+            <header className={styles.inspectorHeader}>
+              <div className={styles.inspectorIdentity}>
+                <IconButton label="Back to conversation" size="touch" className={styles.inspectorBack} onClick={hideInspector}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
+                </IconButton>
+                <h2>Inspector</h2>
+              </div>
+              <div className={styles.inspectorTabs}>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes{gitChangesCount !== null && gitChangesCount > 0 && <span className={styles.inspectorCount}>{gitChangesCount}</span>}</button>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "terminal"} onClick={handleOpenTerminal}>Terminal</button>
+                <div className={styles.desktopFileTabs}>
+                  <TabBar
+                    tabs={fileTabs}
+                    activeTabId={rightPanelView === "file" ? activeFileTabId ?? "" : ""}
+                    onSelectTab={handleSelectFileTab}
+                    onCloseTab={handleCloseFileTab}
+                  />
                 </div>
               </div>
-            )
-          ) : null}
-        </div>
-      </div>
-
-      {/* Right panel: changes/file viewer — always mounted, width animated via CSS */}
-      <div
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${resizingPanel === "right" ? " right-panel-resizing" : ""}`}
-        style={{
-          "--right-panel-width": `${rightPanelWidth}px`,
-          display: "flex",
-          flexDirection: "column",
-          borderLeft: "1px solid var(--border)",
-          background: "var(--bg)",
-        } as CSSProperties}
-      >
-        {rightPanelOpen && !isMobile && (
-          <div
-            className={`panel-resize-handle right-panel-resize-handle${resizingPanel === "right" ? " active" : ""}`}
-            onPointerDown={startRightPanelResize}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize right panel"
-            title="Resize right panel"
-          />
-        )}
-
-        {/* Right panel tab bar */}
-        <div style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
-          <button
-            onClick={handleOpenChanges}
-            title="View uncommitted changes"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              height: 36,
-              padding: "0 12px",
-              border: "none",
-              borderRight: "1px solid var(--border)",
-              background: rightPanelView === "changes" ? "var(--bg)" : "var(--bg-panel)",
-              color: rightPanelView === "changes" ? "var(--text)" : "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-              userSelect: "none",
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: rightPanelView === "changes" ? 1 : 0.75 }}>
-              <path d="M16 3h5v5" />
-              <path d="M8 21H3v-5" />
-              <path d="M21 3l-7 7" />
-              <path d="M3 21l7-7" />
-              <path d="M14 3h-4a4 4 0 0 0-4 4v10" />
-            </svg>
-            <span style={{ fontWeight: rightPanelView === "changes" ? 500 : 400 }}>Changes</span>
-            {gitChangesCount !== null && gitChangesCount > 0 && (
-              <span style={{
-                minWidth: 17,
-                height: 17,
-                padding: "0 5px",
-                borderRadius: 999,
-                background: "var(--bg-selected)",
-                color: "var(--text-muted)",
-                fontSize: 10,
-                lineHeight: "17px",
-                textAlign: "center",
-                fontFamily: "var(--font-mono)",
-              }}>
-                {gitChangesCount}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={handleOpenTerminal}
-            title="Open terminal"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              height: 36,
-              padding: "0 12px",
-              border: "none",
-              borderRight: "1px solid var(--border)",
-              background: rightPanelView === "terminal" ? "var(--bg)" : "var(--bg-panel)",
-              color: rightPanelView === "terminal" ? "var(--text)" : "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-              userSelect: "none",
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: rightPanelView === "terminal" ? 1 : 0.75 }}>
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            <span style={{ fontWeight: rightPanelView === "terminal" ? 500 : 400 }}>Terminal</span>
-          </button>
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <TabBar
-              tabs={fileTabs}
-              activeTabId={rightPanelView === "file" ? activeFileTabId ?? "" : ""}
-              onSelectTab={(id) => {
-                setActiveFileTabId(id);
-                setRightPanelView("file");
-                setRightPanelOpen(true);
-              }}
-              onCloseTab={handleCloseFileTab}
-            />
-          </div>
-
-        </div>
-
-        {/* Right panel content */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          {rightPanelView === "changes" ? (
-            <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
-          ) : rightPanelView === "terminal" ? (
-            <TerminalPanel cwd={gitChangesCwd} scopeId={terminalScopeId} />
-          ) : activeFileTab?.filePath ? (
-            <FileViewer
-              filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
-              sourceSessionId={activeFileTab.sourceSessionId}
-            />
-          ) : (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
-              No file open
+              <nav className={styles.mobileInspectorTabs} aria-label="Inspector views">
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes{gitChangesCount !== null && gitChangesCount > 0 && <span className={styles.inspectorCount}>{gitChangesCount}</span>}</button>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "file"} onClick={handleOpenPreview}>Preview{fileTabs.length > 0 && <span className={styles.inspectorCount}>{fileTabs.length}</span>}</button>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "terminal"} onClick={handleOpenTerminal}>Terminal</button>
+              </nav>
+            </header>
+            <div className={styles.inspectorBody}>
+              {rightPanelView === "changes" ? (
+                <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
+              ) : rightPanelView === "terminal" ? (
+                <TerminalPanel cwd={gitChangesCwd} scopeId={terminalScopeId} />
+              ) : activeFileTab?.filePath ? (
+                <div className={styles.inspectorFileView}>
+                  <button type="button" className={styles.inspectorFileSwitcher} onClick={openInspectorFileSheet} aria-haspopup="dialog" aria-expanded={inspectorFileSheetOpen}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><polyline points="14 2 14 8 20 8" /></svg>
+                    <span><strong>{activeFileTab.label}</strong><small>{activeFileTab.filePath}</small></span>
+                    <span className={styles.inspectorFileCount}>{fileTabs.length} open</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9" /></svg>
+                  </button>
+                  <div className={styles.inspectorFileBody}>
+                    <FileViewer filePath={activeFileTab.filePath} cwd={activeCwd ?? undefined} sourceSessionId={activeFileTab.sourceSessionId} />
+                  </div>
+                </div>
+              ) : (
+                <div className={styles.noFile}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><polyline points="14 2 14 8 20 8" /></svg>
+                  <h3>No file preview</h3>
+                  <p>Open a file from Explorer or a message link to inspect it here.</p>
+                  {usesOverlayLayout && fileTabs.length > 0 && <Button onClick={openInspectorFileSheet}>Choose open file</Button>}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        </aside>
       </div>
-    </div>
-    {/* File panel toggle — always visible at top-right */}
-    <button
-      onClick={() => setRightPanelOpen((v) => {
-        const next = !v;
-        if (next && !activeFileTabId) setRightPanelView("changes");
-        return next;
-      })}
-      title={rightPanelOpen ? "Hide right panel" : "Show right panel"}
-      aria-label={rightPanelOpen ? "Hide right panel" : "Show right panel"}
-      style={{
-        position: "fixed", top: "var(--pi-safe-area-top)", right: 0, zIndex: 300,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: 36, height: 36, padding: 0,
-        background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
-        color: rightPanelOpen ? "var(--text)" : "var(--text-muted)",
-        cursor: "pointer", transition: "color 0.12s",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.color = rightPanelOpen ? "var(--text)" : "var(--text-muted)"; }}
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
-      </svg>
-    </button>
-    {modelsConfigOpen && <ModelsConfig onClose={() => { setModelsConfigOpen(false); setModelsRefreshKey((k) => k + 1); }} />}
-    {settingsOpen && (
-      <SettingsModal
-        settings={appSettings}
-        cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={(next) => setAppSettings(next)}
-        onOpenModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
-        onOpenScopedModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
-        onOpenAuth={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
-        onOpenProjectTrust={() => { setSettingsOpen(false); setProjectTrustOpen(true); }}
+
+      <MobileMoreSheet
+        open={mobileMoreOpen}
+        onOpenChange={(open) => { if (!open) closeWorkspaceLayer(); }}
+        actions={mobileMoreActions}
+        hasWorkspace={hasWorkspace}
+        hasSession={Boolean(selectedSession)}
+        isDark={isDark}
       />
-    )}
-    {projectTrustOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
-      <ProjectTrustModal
-        cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!}
-        onClose={() => setProjectTrustOpen(false)}
-        onChanged={() => {
-          setRefreshKey((k) => k + 1);
-          setModelsRefreshKey((k) => k + 1);
-        }}
+
+      <InspectorFileSheet
+        open={usesOverlayLayout && inspectorFileSheetOpen}
+        tabs={fileTabs}
+        activeTabId={activeFileTabId}
+        onOpenChange={(open) => { if (open) openInspectorFileSheet(); else closeInspectorFileSheet(); }}
+        onSelect={handleSelectInspectorFile}
+        onClose={handleCloseFileTab}
       />
-    )}
-    {hotkeysOpen && <HotkeysModal onClose={() => setHotkeysOpen(false)} />}
-    {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
-      <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
-    )}
-    {pluginsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
-      <PluginsConfig
-        cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!}
-        sessionId={selectedSession?.id ?? null}
-        onClose={() => setPluginsConfigOpen(false)}
-        onReloaded={() => setSessionKey((k) => k + 1)}
-      />
-    )}
+
+      {modelsConfigOpen && <ModelsConfig onClose={() => { setModelsConfigOpen(false); setModelsRefreshKey((key) => key + 1); }} />}
+      {settingsOpen && (
+        <SettingsModal
+          settings={appSettings}
+          cwd={gitChangesCwd}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(next) => setAppSettings(next)}
+          onOpenModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+          onOpenScopedModels={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+          onOpenAuth={() => { setSettingsOpen(false); setModelsConfigOpen(true); }}
+          onOpenProjectTrust={() => { setSettingsOpen(false); setProjectTrustOpen(true); }}
+        />
+      )}
+      {projectTrustOpen && gitChangesCwd && (
+        <ProjectTrustModal
+          cwd={gitChangesCwd}
+          onClose={() => setProjectTrustOpen(false)}
+          onChanged={() => { setRefreshKey((key) => key + 1); setModelsRefreshKey((key) => key + 1); }}
+        />
+      )}
+      {hotkeysOpen && <HotkeysModal onClose={() => setHotkeysOpen(false)} />}
+      {skillsConfigOpen && gitChangesCwd && <SkillsConfig cwd={gitChangesCwd} onClose={() => setSkillsConfigOpen(false)} />}
+      {pluginsConfigOpen && gitChangesCwd && (
+        <PluginsConfig
+          cwd={gitChangesCwd}
+          sessionId={selectedSession?.id ?? null}
+          onClose={() => setPluginsConfigOpen(false)}
+          onReloaded={() => setSessionKey((key) => key + 1)}
+        />
+      )}
     </>
   );
 }

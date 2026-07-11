@@ -1,0 +1,68 @@
+.root { padding: var(--space-half); display: grid; gap: 1px; }
+.node { --file-depth: 0; min-width: 0; }
+.row {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 var(--space-half) 0 calc(var(--space-half) + var(--file-depth) * 14px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  user-select: none;
+  transition: background-color var(--motion-fast) var(--ease-snap), color var(--motion-fast) var(--ease-snap);
+}
+.row:hover,
+.row:focus-within { background: var(--bg-hover); }
+.row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.chevronSlot { width: 12px; height: 12px; display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--text-dim); }
+.chevron { width: 10px; height: 10px; transition: transform var(--motion-fast) var(--ease-snap); }
+.chevron[data-open="true"] { transform: rotate(90deg); }
+.fileIcon { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.name { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.spinner { width: 12px; height: 12px; flex: 0 0 auto; color: var(--text-dim); animation: fileSpin 700ms linear infinite; }
+.actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; opacity: 0; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-snap); }
+.row:hover .actions,
+.row:focus-within .actions { opacity: 1; pointer-events: auto; }
+.action {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+}
+.action:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 36%, var(--border)); }
+.action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.action svg { width: 12px; height: 12px; }
+.emptyDirectory { min-height: 28px; padding-left: calc(var(--space-2) + var(--file-depth) * 14px); display: flex; align-items: center; color: var(--text-dim); font-size: 10px; font-style: italic; }
+.state { min-height: 120px; padding: var(--space-2); display: grid; align-content: center; gap: var(--space-1); color: var(--text-muted); font-size: 11px; }
+.state[data-tone="danger"] { color: var(--error); }
+.skeletons { display: grid; gap: var(--space-1); }
+
+@keyframes fileSpin { to { transform: rotate(360deg); } }
+
+@media (pointer: coarse), (max-width: 640px) {
+  .root { padding: var(--space-half) var(--space-1); }
+  .row { min-height: var(--control-touch); padding-right: 2px; }
+  .name { font-size: 12px; }
+  .actions { opacity: 1; pointer-events: auto; }
+  .action { width: var(--control-touch); height: var(--control-touch); background: transparent; border-color: transparent; }
+  .emptyDirectory { min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}

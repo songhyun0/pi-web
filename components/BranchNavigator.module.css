@@ -1,0 +1,70 @@
+.roleBadge { min-width: 18px; padding-inline: 4px; flex: 0 0 auto; color: var(--text-dim); background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 9px; line-height: 16px; text-align: center; }
+.roleBadge[data-role="user"] { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); }
+.treeRow { min-height: 28px; display: flex; align-items: center; gap: var(--space-half); color: var(--text-dim); border-radius: var(--radius-md); }
+.treeRow:hover { background: var(--bg-hover); }
+.treeRow[data-path="true"] { color: var(--text-muted); }
+.treeRow[data-active="true"] { color: var(--text); background: var(--bg-selected); }
+.connector { width: var(--tree-depth-width); flex: 0 0 auto; overflow: hidden; color: inherit; font-family: var(--font-mono); font-size: 10px; white-space: pre; }
+.foldButton { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; font: inherit; }
+.foldButton:hover:not(:disabled) { color: var(--text); background: var(--bg-selected); }
+.foldButton:disabled { color: transparent; cursor: default; }
+.rowSelect { min-width: 0; min-height: 28px; padding: 0 var(--space-half) 0 0; flex: 1; display: flex; align-items: center; gap: var(--space-half); overflow: hidden; color: inherit; background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; font: inherit; text-align: left; }
+.foldButton:focus-visible,
+.rowSelect:focus-visible,
+.inlineTrigger:focus-visible,
+.blockTrigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.nodeDot { width: 7px; height: 7px; flex: 0 0 auto; background: var(--border); border: 1px solid var(--text-dim); border-radius: var(--radius-full); }
+.treeRow[data-path="true"] .nodeDot { background: var(--text-muted); }
+.treeRow[data-active="true"] .nodeDot { background: var(--accent); border-color: var(--accent); }
+.skipped { flex: 0 0 auto; color: var(--text-dim); font-size: 10px; }
+.rowTitle { min-width: 0; flex: 1; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.treeRow[data-active="true"] .rowTitle { font-weight: 650; }
+.label { color: var(--accent); }
+.separator { color: var(--text-dim); }
+.childCount { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 9px; }
+.icon { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-dim); }
+.icon[data-active="true"] { color: var(--accent); }
+.chevron { width: 10px; height: 10px; margin-left: 2px; flex: 0 0 auto; color: var(--text-dim); transition: transform var(--motion-fast) var(--ease-snap); }
+.chevron[data-open="true"] { transform: rotate(180deg); }
+.panel { display: grid; gap: var(--space-1); max-height: min(420px, calc(100dvh - var(--panel-top, 52px) - 16px)); padding: var(--space-1) var(--space-1-5) var(--space-1-5); overflow-y: auto; overscroll-behavior: contain; }
+.filters { display: grid; grid-template-columns: minmax(140px, 1fr) auto; gap: var(--space-half); }
+.search,
+.filterSelect { min-height: 34px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); font: inherit; font-size: 11px; }
+.search { min-width: 0; padding: 0 var(--space-1); }
+.filterSelect { padding: 0 var(--space-1); }
+.search:focus,
+.filterSelect:focus { border-color: color-mix(in srgb, var(--accent) 56%, var(--border)); outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent); outline-offset: 0; }
+.reason,
+.empty { color: var(--text-dim); font-size: 11px; font-style: italic; }
+.empty { padding: var(--space-1) var(--space-half); color: var(--text-muted); font-size: 12px; }
+.rows { margin: 0; padding: 0; display: grid; gap: 1px; list-style: none; }
+.inlineRoot { height: 100%; display: flex; align-items: stretch; }
+.inlineTrigger { height: 100%; padding: 0 var(--space-1-5); display: flex; align-items: center; gap: var(--space-half); color: var(--text-muted); background: transparent; border: 0; border-top: 2px solid transparent; border-right: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap; transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap); }
+.inlineTrigger:hover { color: var(--text); background: var(--bg-hover); }
+.inlineTrigger[data-open="true"] { color: var(--text); background: var(--bg-selected); border-top-color: var(--accent); }
+.floatingPanel { position: fixed; z-index: var(--z-popover); max-width: 100vw; background: var(--bg-panel); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-popover); }
+.blockRoot { position: relative; flex: 0 0 auto; background: var(--bg); border-bottom: 1px solid var(--border); }
+.blockTrigger { width: 100%; min-height: 34px; padding: var(--space-half) var(--space-1-5); display: flex; align-items: center; gap: var(--space-half); color: var(--text-muted); background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 11px; text-align: left; }
+.blockTrigger:hover { color: var(--text); background: var(--bg-hover); }
+.blockPanel { position: absolute; inset: 100% 0 auto; z-index: var(--z-popover); background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-popover); }
+.noContent { padding: var(--space-1) var(--space-2); color: var(--text-muted); font-size: 12px; font-style: italic; }
+
+@media (max-width: 1024px), (pointer: coarse) {
+  .inlineTrigger,
+  .blockTrigger,
+  .treeRow,
+  .rowSelect { min-height: 44px; }
+  .foldButton { width: 44px; height: 44px; }
+  .search,
+  .filterSelect { min-height: 44px; font-size: 12px; }
+  .panel { max-height: calc(100dvh - var(--panel-top, 52px)); padding: var(--space-1); }
+}
+
+@media (max-width: 640px) {
+  .filters { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron,
+  .inlineTrigger { transition: none; }
+}

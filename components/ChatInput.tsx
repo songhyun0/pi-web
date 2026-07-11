@@ -1,17 +1,25 @@
+// biome-ignore-all lint/performance/noImgElement: composer previews use runtime blob/data URLs.
 "use client";
 
-import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+import React, { forwardRef, type KeyboardEvent, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, ExtensionAutocompleteResult, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
-import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
-import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
-import {
-  buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
-  type AtQueryMatch, type FileIndexEntry,
-} from "@/lib/file-fuzzy";
-import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useViewportTier } from "@/hooks/useViewportTier";
+import { type ChatDraftImage, clearDraft, getDraft, setDraft } from "@/lib/draft-store";
+import {
+  type AtQueryMatch,
+  buildAtInsertText,
+  buildEntriesFromFiles,
+  extractAtQuery,
+  type FileIndexEntry,
+  filterFileEntries,
+} from "@/lib/file-fuzzy";
 import { readSafeAreaInsetPx } from "@/lib/safe-area";
+import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-registry";
 import { buildWebKeybindings, eventMatchesWebAction, type WebKeybinding } from "@/lib/web-keybindings";
+import styles from "./ChatInput.module.css";
+import { FolderIcon, getFileIcon } from "./FileIcons";
+import { Button, Dialog } from "./ui";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -80,7 +88,7 @@ const COMPOSITION_END_ENTER_GRACE_MS = 100;
 const AUTOCOMPLETE_MENU_GAP_PX = 8;
 const AUTOCOMPLETE_MENU_MAX_HEIGHT_PX = 460;
 const AUTOCOMPLETE_MENU_MIN_HEIGHT_PX = 96;
-const MOBILE_AUTOCOMPLETE_TOP_GUARD_PX = 44; // 36px top bar + breathing room
+const MOBILE_AUTOCOMPLETE_TOP_GUARD_PX = 60; // 52px compact top bar + breathing room
 const DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX = 8;
 const MODEL_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -172,32 +180,9 @@ function revokeImagePreview(image: AttachedImage): void {
 
 function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: string }) {
   return (
-    <div
-      title={text}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "3px 10px",
-        fontSize: 12,
-        color: "var(--text-muted)",
-        minWidth: 0,
-      }}
-    >
-      <span
-        style={{
-          flexShrink: 0,
-          fontSize: 10,
-          fontFamily: "var(--font-mono)",
-          padding: "1px 7px",
-          borderRadius: 999,
-          border: `1px solid ${kind === "steer" ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border)"}`,
-          color: kind === "steer" ? "var(--accent)" : "var(--text-dim)",
-        }}
-      >
-        {kind}
-      </span>
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
+    <div className={styles.queueRow} title={text}>
+      <span className={styles.queueKind} data-kind={kind}>{kind}</span>
+      <span className={styles.queueText}>{text}</span>
     </div>
   );
 }
@@ -219,6 +204,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onExtensionAutocomplete,
 }: Props, ref) {
   const isMobile = useIsMobile();
+  const usesCompactControls = useViewportTier() !== "desktop";
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -245,11 +231,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [extensionAutocompleteActiveIndex, setExtensionAutocompleteActiveIndex] = useState(0);
   const [cursorPosition, setCursorPosition] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const promptEditorRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteAnchorRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownPanelRef = useRef<HTMLDivElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
-  const controlsMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
@@ -404,11 +390,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const openPromptEditor = useCallback(() => {
     setPromptEditorValue(valueRef.current);
     setPromptEditorOpen(true);
-    requestAnimationFrame(() => {
-      const editor = document.getElementById("pi-web-prompt-editor") as HTMLTextAreaElement | null;
-      editor?.focus();
-      if (editor) editor.setSelectionRange(editor.value.length, editor.value.length);
-    });
   }, []);
 
   const savePromptEditor = useCallback(() => {
@@ -533,8 +514,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       groups.get(command.source)?.items.push({ command, index });
     });
     return SLASH_SOURCES
-      .map((source) => groups.get(source)!)
-      .filter((group) => group.items.length > 0);
+      .map((source) => groups.get(source))
+      .filter((group): group is { source: SlashCommandSource; items: { command: SlashCommandPaletteItem; index: number }[] } => Boolean(group && group.items.length > 0));
   })();
 
   const slashCommandCountLabel = filteredSlashCommands.length === 1
@@ -1047,14 +1028,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (thinkingDropdownRef.current && !thinkingDropdownRef.current.contains(e.target as Node)) {
         setThinkingDropdownOpen(false);
       }
-      if (controlsMenuRef.current && !controlsMenuRef.current.contains(e.target as Node)) {
-        setControlsMenuOpen(false);
-      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: content changes intentionally remeasure anchored autocomplete height.
   useEffect(() => {
     if (!slashMenuOpen && !atMenuOpen) return;
 
@@ -1062,7 +1041,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const updateAutocompleteHeight = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        setAutocompleteMenuMaxHeight(computeAutocompleteMenuMaxHeight(autocompleteAnchorRef.current, isMobile));
+        setAutocompleteMenuMaxHeight(computeAutocompleteMenuMaxHeight(autocompleteAnchorRef.current, usesCompactControls));
       });
     };
 
@@ -1077,27 +1056,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       window.visualViewport?.removeEventListener("resize", updateAutocompleteHeight);
       window.visualViewport?.removeEventListener("scroll", updateAutocompleteHeight);
     };
-  }, [slashMenuOpen, atMenuOpen, isMobile, value, attachedImages.length, filteredSlashCommands.length, atMatches.length, slashCommandsLoading, fileIndexLoading]);
+  }, [slashMenuOpen, atMenuOpen, usesCompactControls, value, attachedImages.length, filteredSlashCommands.length, atMatches.length, slashCommandsLoading, fileIndexLoading]);
 
   useEffect(() => {
-    if (!isMobile) setControlsMenuOpen(false);
-  }, [isMobile]);
+    if (!usesCompactControls) setControlsMenuOpen(false);
+  }, [usesCompactControls]);
 
   const slashMenuMaxHeight = Math.min(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX, autocompleteMenuMaxHeight);
-  const slashMenuBodyMaxHeight = Math.max(48, slashMenuMaxHeight - 34);
   const atMenuMaxHeight = Math.min(400, autocompleteMenuMaxHeight);
-  const atMenuBodyMaxHeight = Math.max(48, atMenuMaxHeight - 34);
 
 
   return (
-    <div
-      style={{
-        flexShrink: 0,
-        background: "transparent",
-        padding: isMobile ? "0 16px calc(8px + var(--pi-safe-area-bottom))" : "0 16px 8px",
-        paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
-      }}
-    >
+    <div className={styles.root} data-minimap={!isMobile || undefined}>
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -1105,165 +1075,90 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         accept="image/*"
         multiple
         disabled={isStreaming}
-        style={{ display: "none" }}
+        className={styles.hiddenInput}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
           processImageFiles(files);
           e.target.value = "";
         }}
       />
-      {promptEditorOpen && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div style={{ width: "min(900px, 96vw)", height: "min(720px, 86vh)", border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg)", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>Prompt editor</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Browser-safe replacement for the CLI external editor shortcut.</div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => setPromptEditorOpen(false)} style={{ border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Cancel</button>
-                <button onClick={savePromptEditor} style={{ border: "1px solid var(--accent)", background: "var(--accent)", color: "white", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Use text</button>
-              </div>
-            </div>
-            <textarea
-              id="pi-web-prompt-editor"
-              value={promptEditorValue}
-              onChange={(event) => setPromptEditorValue(event.target.value)}
-              onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                  event.preventDefault();
-                  savePromptEditor();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  setPromptEditorOpen(false);
-                }
-              }}
-              style={{ flex: 1, resize: "none", border: "none", outline: "none", padding: 16, background: "var(--bg)", color: "var(--text)", fontSize: 14, lineHeight: 1.5, fontFamily: "var(--font-mono)" }}
-            />
-          </div>
-        </div>
-      )}
-      <div style={{ maxWidth: 820, margin: "0 auto" }}>
+      <Dialog
+        open={promptEditorOpen}
+        onOpenChange={setPromptEditorOpen}
+        title="Prompt editor"
+        description="Browser-safe replacement for the CLI external editor shortcut."
+        variant="adaptive"
+        size="xl"
+        initialFocusRef={promptEditorRef}
+        footer={
+          <>
+            <Button size={usesCompactControls ? "touch" : "compact"} onClick={() => setPromptEditorOpen(false)}>Cancel</Button>
+            <Button variant="primary" size={usesCompactControls ? "touch" : "compact"} onClick={savePromptEditor}>Use text</Button>
+          </>
+        }
+      >
+        <textarea
+          ref={promptEditorRef}
+          id="pi-web-prompt-editor"
+          aria-label="Prompt text"
+          className={styles.promptEditor}
+          value={promptEditorValue}
+          onChange={(event) => setPromptEditorValue(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              savePromptEditor();
+            }
+          }}
+        />
+      </Dialog>
+      <div className={styles.inner}>
         {/* Queued steering / follow-up messages (delivered by pi on upcoming turns) */}
         {((queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)) > 0 && (
-          <div style={{
-            marginBottom: 8,
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            background: "var(--bg-panel)",
-            padding: "5px 0",
-          }}>
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-              padding: "2px 8px 4px 10px",
-            }}>
-              <span style={{
-                fontSize: 10,
-                fontFamily: "var(--font-mono)",
-                color: "var(--text-dim)",
-                textTransform: "uppercase",
-                letterSpacing: 0.4,
-              }}>
-                Queued · {(queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)}
-              </span>
+          <div className={styles.queuePanel}>
+            <div className={styles.queueHeader}>
+              <span className={styles.queueTitle}>Queued · {(queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)}</span>
               {onRecallQueue && (
-                <button
+                <Button
+                  size={usesCompactControls ? "touch" : "compact"}
                   onClick={onRecallQueue}
                   title="Remove all queued messages and put them back into the input box for editing"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "4px 12px",
-                    fontSize: 12,
-                    color: "var(--text)",
-                    background: "transparent",
-                    border: "1px solid var(--border)",
-                    borderRadius: 7,
-                    cursor: "pointer",
-                    transition: "background 0.12s, border-color 0.12s",
-                    whiteSpace: "nowrap",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 45%, var(--border))";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.borderColor = "var(--border)";
-                  }}
                 >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="9 14 4 9 9 4" />
-                    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
-                  </svg>
                   Recall to input
-                </button>
+                </Button>
               )}
             </div>
-            {queuedMessages?.steering.map((text, i) => (
-              <QueuedMessageRow key={`steer-${i}`} kind="steer" text={text} />
+            {queuedMessages?.steering.map((text) => (
+              <QueuedMessageRow key={`steer:${text}`} kind="steer" text={text} />
             ))}
-            {queuedMessages?.followUp.map((text, i) => (
-              <QueuedMessageRow key={`followup-${i}`} kind="follow-up" text={text} />
+            {queuedMessages?.followUp.map((text) => (
+              <QueuedMessageRow key={`followup:${text}`} kind="follow-up" text={text} />
             ))}
           </div>
         )}
         {/* Retry banner */}
         {retryInfo && (
-          <div style={{
-            marginBottom: 8, padding: "5px 10px",
-            background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.25)",
-            borderRadius: 6, fontSize: 12, color: "rgba(180,130,0,0.9)",
-            display: "flex", alignItems: "center", gap: 6,
-          }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-              <path d="M3 3v5h5" />
-            </svg>
-            Retrying ({retryInfo.attempt}/{retryInfo.maxAttempts})…{retryInfo.errorMessage && <span style={{ opacity: 0.7, marginLeft: 4 }}>— {retryInfo.errorMessage}</span>}
-          </div>
+          <output className={styles.feedback} data-tone="warning">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+            <span>Retrying ({retryInfo.attempt}/{retryInfo.maxAttempts})…</span>
+            {retryInfo.errorMessage && <span className={styles.feedbackDetail}>— {retryInfo.errorMessage}</span>}
+          </output>
         )}
         {compactResultText && (
-          <div style={{
-            marginBottom: 8, padding: "5px 10px",
-            background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.24)",
-            borderRadius: 6, fontSize: 12, color: "rgba(5,150,105,0.95)",
-            display: "flex", alignItems: "center", gap: 6,
-          }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-            {compactResultText}
-          </div>
+          <output className={styles.feedback} data-tone="success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+            <span>{compactResultText}</span>
+          </output>
         )}
         {/* Image previews */}
         {attachedImages.length > 0 && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-            {attachedImages.map((img, i) => (
-              <div key={i} style={{ position: "relative", flexShrink: 0 }}>
+          <div className={styles.attachments}>
+            {attachedImages.map((image, index) => (
+              <div key={image.previewUrl} className={styles.attachment}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.previewUrl}
-                  alt=""
-                  style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)", display: "block" }}
-                />
-                <button
-                  onClick={() => removeImage(i)}
-                  style={{
-                    position: "absolute", top: -4, right: -4,
-                    width: 16, height: 16, borderRadius: "50%",
-                    background: "var(--bg-panel)", border: "1px solid var(--border)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
-                  }}
-                >
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
-                  </svg>
+                <img src={image.previewUrl} alt="Attached preview" className={styles.attachmentImage} />
+                <button type="button" className={styles.attachmentRemove} onClick={() => removeImage(index)} aria-label={`Remove attachment ${index + 1}`}>
+                  <svg viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" /></svg>
                 </button>
               </div>
             ))}
@@ -1271,126 +1166,50 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         )}
 
         {/* Main input */}
-        <div ref={autocompleteAnchorRef} style={{ position: "relative" }}>
+        <div ref={autocompleteAnchorRef} className={styles.anchor}>
           {slashMenuOpen && slashQuery !== null && (
             <div
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: "calc(100% + 8px)",
-                zIndex: 120,
-                background: "var(--bg)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
-                overflow: "hidden",
-                maxHeight: slashMenuMaxHeight,
-              }}
+              id="composer-slash-menu"
+              className={styles.menu}
+              style={{ "--composer-menu-height": `${slashMenuMaxHeight}px` } as React.CSSProperties}
+              role="listbox"
+              aria-label="Slash commands"
             >
-              <div
-                style={{
-                  padding: "8px 10px",
-                  borderBottom: "1px solid var(--border)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  fontSize: 11,
-                  color: "var(--text-dim)",
-                }}
-              >
-                <span>{slashCommandsLoading ? "Loading commands..." : `Slash commands · ${slashCommandCountLabel}`}</span>
-                <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+              <div className={styles.menuHeader}>
+                <span>{slashCommandsLoading ? "Loading commands…" : `Slash commands · ${slashCommandCountLabel}`}</span>
+                <span className={styles.menuHint}>Tab / Enter</span>
               </div>
-              <div style={{ maxHeight: slashMenuBodyMaxHeight, overflowY: "auto", padding: 10 }}>
+              <div className={styles.menuBody}>
                 {!slashCommandsLoading && filteredSlashCommands.length === 0 ? (
-                  <div style={{ padding: "2px 2px 4px", fontSize: 12, color: "var(--text-dim)" }}>
-                    No slash commands found
-                  </div>
+                  <div className={styles.menuEmpty}>No slash commands found</div>
                 ) : (
                   groupedSlashCommands.map((group) => (
-                    <section key={group.source} style={{ marginBottom: 12 }}>
-                      <div
-                        style={{
-                          position: "sticky",
-                          top: -10,
-                          zIndex: 1,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: 8,
-                          padding: "4px 0 6px",
-                          background: "var(--bg)",
-                          color: "var(--text-dim)",
-                          fontSize: 10,
-                          fontWeight: 600,
-                          textTransform: "uppercase",
-                        }}
-                      >
+                    <section key={group.source} className={styles.menuGroup}>
+                      <div className={styles.menuGroupHeader}>
                         <span>{SLASH_SOURCE_GROUP_LABEL[group.source]}</span>
-                        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>{group.items.length}</span>
+                        <span className={styles.menuHint}>{group.items.length}</span>
                       </div>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                          gap: 8,
-                        }}
-                      >
+                      <div className={styles.commandGrid}>
                         {group.items.map(({ command, index }) => {
                           const active = index === slashActiveIndex;
                           return (
                             <button
+                              id={`slash-option-${index}`}
                               key={`${command.source}:${command.name}`}
-                              ref={(node) => {
-                                slashItemRefs.current[index] = node;
-                              }}
+                              ref={(node) => { slashItemRefs.current[index] = node; }}
                               type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
+                              role="option"
+                              aria-selected={active}
+                              className={styles.commandItem}
+                              data-active={active || undefined}
+                              onMouseDown={(event) => {
+                                event.preventDefault();
                                 applySlashCommand(command);
                               }}
                               onMouseEnter={() => setSlashActiveIndex(index)}
-                              style={{
-                                width: "100%",
-                                minWidth: 0,
-                                minHeight: 58,
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: 4,
-                                justifyContent: "center",
-                                padding: "9px 10px",
-                                border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-                                borderRadius: 7,
-                                background: active ? "var(--bg-selected)" : "var(--bg-panel)",
-                                color: "var(--text)",
-                                cursor: "pointer",
-                                textAlign: "left",
-                                boxShadow: active ? "0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent)" : "none",
-                              }}
                             >
-                              <span style={{
-                                fontSize: 13,
-                                fontFamily: "var(--font-mono)",
-                                overflowWrap: "anywhere",
-                                wordBreak: "break-word",
-                              }}>
-                                /{command.name}
-                              </span>
-                              {command.description && (
-                                <span style={{
-                                  display: "-webkit-box",
-                                  WebkitBoxOrient: "vertical",
-                                  WebkitLineClamp: 2,
-                                  overflow: "hidden",
-                                  fontSize: 11,
-                                  lineHeight: 1.35,
-                                  color: "var(--text-dim)",
-                                }}>
-                                  {command.description}
-                                </span>
-                              )}
+                              <span className={styles.commandName}>/{command.name}</span>
+                              {command.description && <span className={styles.commandDescription}>{command.description}</span>}
                             </button>
                           );
                         })}
@@ -1411,44 +1230,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               : "";
             return (
               <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  bottom: "calc(100% + 8px)",
-                  zIndex: 120,
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
-                  overflow: "hidden",
-                  maxHeight: atMenuMaxHeight,
-                }}
+                id="composer-file-menu"
+                className={styles.menu}
+                style={{ "--composer-menu-height": `${atMenuMaxHeight}px` } as React.CSSProperties}
+                role="listbox"
+                aria-label="Project files"
               >
-                <div
-                  style={{
-                    padding: "8px 10px",
-                    borderBottom: "1px solid var(--border)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    fontSize: 11,
-                    color: "var(--text-dim)",
-                  }}
-                >
-                  <span>
-                    {indexLoading
-                      ? "Loading files..."
-                      : `Files · ${matchCountLabel}${truncatedHint}`}
-                  </span>
-                  <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+                <div className={styles.menuHeader}>
+                  <span>{indexLoading ? "Loading files…" : `Files · ${matchCountLabel}${truncatedHint}`}</span>
+                  <span className={styles.menuHint}>Tab / Enter</span>
                 </div>
-                <div style={{ maxHeight: atMenuBodyMaxHeight, overflowY: "auto", padding: 4 }}>
+                <div className={styles.menuBody}>
                   {!indexLoading && atMatches.length === 0 ? (
-                    <div style={{ padding: "6px 8px", fontSize: 12, color: "var(--text-dim)" }}>
-                      {needsServerSearch && !serverResultInUse ? "Searching…" : "No matching files"}
-                    </div>
+                    <div className={styles.menuEmpty}>{needsServerSearch && !serverResultInUse ? "Searching…" : "No matching files"}</div>
                   ) : (
                     atMatches.map((entry, index) => {
                       const active = index === atActiveIndex;
@@ -1456,39 +1250,25 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       const dirPrefix = entry.path.slice(0, entry.path.length - name.length);
                       return (
                         <button
+                          id={`file-option-${index}`}
                           key={`${entry.isDir ? "d" : "f"}:${entry.path}`}
-                          ref={(node) => {
-                            atItemRefs.current[index] = node;
-                          }}
+                          ref={(node) => { atItemRefs.current[index] = node; }}
                           type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
+                          role="option"
+                          aria-selected={active}
+                          className={styles.menuItem}
+                          data-active={active || undefined}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
                             applyAtCompletion(entry);
                           }}
                           onMouseEnter={() => setAtActiveIndex(index)}
-                          style={{
-                            width: "100%",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
-                            border: "none",
-                            borderRadius: 6,
-                            background: active ? "var(--bg-selected)" : "none",
-                            color: "var(--text)",
-                            cursor: "pointer",
-                            textAlign: "left",
-                            fontSize: 12.5,
-                            fontFamily: "var(--font-mono)",
-                          }}
                         >
-                          <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
-                            {entry.isDir ? <FolderIcon size={14} /> : getFileIcon(name, 14)}
-                          </span>
-                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {dirPrefix && <span style={{ color: "var(--text-dim)" }}>{dirPrefix}</span>}
+                          <span className={styles.menuItemIcon}>{entry.isDir ? <FolderIcon size={14} /> : getFileIcon(name, 14)}</span>
+                          <span className={styles.menuItemPath}>
+                            {dirPrefix && <em>{dirPrefix}</em>}
                             {name}
-                            {entry.isDir && <span style={{ color: "var(--text-dim)" }}>/</span>}
+                            {entry.isDir && <em>/</em>}
                           </span>
                         </button>
                       );
@@ -1500,754 +1280,386 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           })()}
           {extensionAutocompleteOpen && extensionAutocomplete?.items.length ? (
             <div
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: "calc(100% + 8px)",
-                zIndex: 118,
-                background: "var(--bg)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
-                overflow: "hidden",
-                maxHeight: atMenuMaxHeight,
-              }}
+              id="composer-extension-menu"
+              className={styles.menu}
+              style={{ "--composer-menu-height": `${atMenuMaxHeight}px` } as React.CSSProperties}
+              role="listbox"
+              aria-label={extensionAutocomplete.label ? `Extension autocomplete: ${extensionAutocomplete.label}` : "Extension autocomplete"}
             >
-              <div
-                style={{
-                  padding: "8px 10px",
-                  borderBottom: "1px solid var(--border)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  fontSize: 11,
-                  color: "var(--text-dim)",
-                }}
-              >
+              <div className={styles.menuHeader}>
                 <span>{extensionAutocomplete.label ? `Extension autocomplete · ${extensionAutocomplete.label}` : "Extension autocomplete"}</span>
-                <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+                <span className={styles.menuHint}>Tab / Enter</span>
               </div>
-              <div style={{ maxHeight: atMenuBodyMaxHeight, overflowY: "auto", padding: 4 }}>
+              <div className={styles.menuBody}>
                 {extensionAutocomplete.items.map((item, index) => {
                   const active = index === extensionAutocompleteActiveIndex;
                   return (
                     <button
+                      id={`extension-option-${index}`}
                       key={item.id}
                       ref={(node) => { extensionAutocompleteItemRefs.current[index] = node; }}
                       type="button"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
+                      role="option"
+                      aria-selected={active}
+                      className={styles.menuItem}
+                      data-active={active || undefined}
+                      data-stacked={Boolean(item.description) || undefined}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
                         applyExtensionAutocomplete(index);
                       }}
                       onMouseEnter={() => setExtensionAutocompleteActiveIndex(index)}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 3,
-                        padding: "6px 8px",
-                        border: "none",
-                        borderRadius: 6,
-                        background: active ? "var(--bg-selected)" : "none",
-                        color: "var(--text)",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontSize: 12.5,
-                      }}
                     >
-                      <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>{item.label || item.value}</span>
-                      {item.description && <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{item.description}</span>}
+                      <span className={styles.menuItemPath}>{item.label || item.value}</span>
+                      {item.description && <span className={styles.menuItemDescription}>{item.description}</span>}
                     </button>
                   );
                 })}
               </div>
             </div>
           ) : null}
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              background: "var(--bg)",
-              border: `1px solid ${isStreaming && (onSteer || onFollowUp)
-                ? "rgba(234,179,8,0.4)"
-                : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
-              borderRadius: 14,
-              padding: "10px 10px 10px 14px",
-              boxShadow: "0 1px 2px rgba(15,23,42,0.04), 0 8px 24px -12px rgba(15,23,42,0.10)",
-              transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
-            } as React.CSSProperties}
-          >
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={(e) => {
-              setValue(e.target.value);
-              setCursorPosition(e.target.selectionStart);
-              updateAtQuery(e.target.value, e.target.selectionStart);
-            }}
-            onSelect={(e) => {
-              const el = e.currentTarget;
-              setCursorPosition(el.selectionStart);
-              updateAtQuery(el.value, el.selectionStart);
-            }}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-            }}
-            onCompositionEnd={(e) => {
-              isComposingRef.current = false;
-              lastCompositionEndAtRef.current = Date.now();
-              const el = e.currentTarget;
-              setCursorPosition(el.selectionStart);
-              updateAtQuery(el.value, el.selectionStart);
-            }}
-            onInput={handleInput}
-            onPaste={handlePaste}
-            placeholder={
-              isStreaming && (onSteer || onFollowUp)
-                ? "Steer now / queue follow-up..."
-                : isStreaming ? "Agent is running…"
-                : "Message… Type / for commands, @ for files"
-            }
-            rows={1}
-            style={{
-              flex: 1,
-              background: "none",
-              border: "none",
-              outline: "none",
-              resize: "none",
-              color: "var(--text)",
-              fontSize: 14,
-              lineHeight: 1.6,
-              fontFamily: "inherit",
-              minHeight: 24,
-              maxHeight: 200,
-              overflow: "auto",
-            }}
-          />
-
-          {isStreaming ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
-              {onSteer && (
-                <button
-                  onClick={() => sendQueued("steer")}
-                  disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(234,179,8,0.12)" : "none",
-                    border: "1px solid rgba(234,179,8,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(180,130,0,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
-                  </svg>
-                  Steer
-                </button>
-              )}
-              {onFollowUp && (
-                <button
-                  onClick={() => sendQueued("followup")}
-                  disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(129,140,248,0.12)" : "none",
-                    border: "1px solid rgba(129,140,248,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(99,102,241,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
-                    <line x1="2" y1="9" x2="8" y2="9" />
-                  </svg>
-                  Follow-up
+          <div className={styles.composer} data-streaming={isStreaming || undefined}>
+            <textarea
+              ref={textareaRef}
+              className={styles.editor}
+              aria-label="Message"
+              aria-autocomplete="list"
+              aria-controls={slashMenuOpen ? "composer-slash-menu" : atMenuOpen ? "composer-file-menu" : extensionAutocompleteOpen ? "composer-extension-menu" : undefined}
+              aria-activedescendant={
+                slashMenuOpen ? `slash-option-${slashActiveIndex}`
+                  : atMenuOpen ? `file-option-${atActiveIndex}`
+                    : extensionAutocompleteOpen ? `extension-option-${extensionAutocompleteActiveIndex}`
+                      : undefined
+              }
+              value={value}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setCursorPosition(event.target.selectionStart);
+                updateAtQuery(event.target.value, event.target.selectionStart);
+              }}
+              onSelect={(event) => {
+                const element = event.currentTarget;
+                setCursorPosition(element.selectionStart);
+                updateAtQuery(element.value, element.selectionStart);
+              }}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={(event) => {
+                isComposingRef.current = false;
+                lastCompositionEndAtRef.current = Date.now();
+                const element = event.currentTarget;
+                setCursorPosition(element.selectionStart);
+                updateAtQuery(element.value, element.selectionStart);
+              }}
+              onInput={handleInput}
+              onPaste={handlePaste}
+              placeholder={
+                isStreaming && (onSteer || onFollowUp)
+                  ? "Steer now or queue a follow-up…"
+                  : isStreaming ? "Agent is running…"
+                    : "Message… Type / for commands, @ for files"
+              }
+              rows={1}
+            />
+            <div className={styles.inputActions}>
+              {isStreaming ? (
+                <>
+                  {onSteer && (
+                    <button
+                      type="button"
+                      className={styles.steerButton}
+                      aria-label="Steer current run"
+                      onClick={() => sendQueued("steer")}
+                      disabled={!canQueueStreamingMessage}
+                      title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
+                    >
+                      <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 1 9 5 5 9" /><line x1="1" y1="5" x2="9" y2="5" /></svg>
+                      <span>Steer</span>
+                    </button>
+                  )}
+                  {onFollowUp && (
+                    <button
+                      type="button"
+                      className={styles.followButton}
+                      aria-label="Queue follow-up"
+                      onClick={() => sendQueued("followup")}
+                      disabled={!canQueueStreamingMessage}
+                      title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
+                    >
+                      <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" /><line x1="2" y1="9" x2="8" y2="9" /></svg>
+                      <span>Follow-up</span>
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button type="button" className={styles.sendButton} onClick={handleSend} disabled={!value.trim() && !attachedImages.length} aria-label="Send message">
+                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="2" y1="7" x2="11" y2="7" /><polyline points="7.5 3 12 7 7.5 11" /></svg>
+                  <span>Send</span>
                 </button>
               )}
             </div>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!value.trim() && !attachedImages.length}
-              style={{
-                flexShrink: 0,
-                alignSelf: "flex-end",
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "7px 14px",
-                background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
-                border: "none",
-                borderRadius: 8,
-                color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
-                transition: "background 0.15s, box-shadow 0.15s",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="2" y1="7" x2="11" y2="7" />
-                <polyline points="7.5 3 12 7 7.5 11" />
-              </svg>
-              Send
-            </button>
-          )}
           </div>
         </div>
 
-        {/* Bottom bar: left | center (context) | right */}
-        <div style={{
-          marginTop: 8,
-          display: isMobile ? "grid" : "flex",
-          gridTemplateColumns: isMobile ? "minmax(0, 1fr) auto" : undefined,
-          alignItems: "center",
-          gap: 6,
-        }}>
-
-          {/* LEFT: attach + model selector (idle) or steer/followup toggle (streaming) */}
-          <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2 }}>
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarLeft}>
             <button
+              type="button"
+              className={styles.control}
+              data-icon-only="true"
+              data-active={attachedImages.length > 0 || undefined}
               onClick={() => fileInputRef.current?.click()}
               disabled={isStreaming}
+              aria-label="Attach image"
               title="Attach image"
-              style={{
-                flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                width: 32, height: 32, padding: 0,
-                background: "none", border: "none",
-                borderRadius: 9,
-                color: attachedImages.length ? "var(--accent)" : "var(--text-muted)",
-                cursor: isStreaming ? "not-allowed" : "pointer",
-                opacity: isStreaming ? 0.5 : 1,
-                transition: "background 0.12s, color 0.12s",
-              }}
-              onMouseEnter={(e) => {
-                if (isStreaming) return;
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "none";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text-muted)";
-              }}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
             </button>
-            {/* Model selector — visible always, disabled during streaming */}
+
             {modelOptions.length > 0 && currentName && onModelChange && (
-                <div ref={dropdownRef} style={{ position: "relative", flex: isMobile ? "1 1 auto" : undefined, minWidth: 0 }}>
-                  <button
-                    onClick={(e) => {
-                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
-                      setModelDropdownOpen((v) => !v);
-                    }}
-                    disabled={isStreaming}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      justifyContent: isMobile ? "flex-start" : undefined,
-                      padding: isMobile ? "8px 10px" : "8px 12px",
-                      height: 32,
-                      width: isMobile ? "100%" : undefined,
-                      maxWidth: isMobile ? "100%" : 220,
-                      overflow: "hidden",
-                      background: modelDropdownOpen ? "var(--bg-hover)" : "none",
-                      border: "none",
-                      borderRadius: 9,
-                      color: "var(--text-muted)",
-                      cursor: isStreaming ? "not-allowed" : "pointer",
-                      fontSize: 12,
-                      opacity: isStreaming ? 0.5 : 1,
-                      transition: "background 0.12s, color 0.12s",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (isStreaming) return;
-                      e.currentTarget.style.background = "var(--bg-hover)";
-                      e.currentTarget.style.color = "var(--text)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = modelDropdownOpen ? "var(--bg-hover)" : "none";
-                      e.currentTarget.style.color = "var(--text-muted)";
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="4" width="16" height="16" rx="2" />
-                      <rect x="9" y="9" width="6" height="6" />
-                      <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
-                      <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
-                      <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
-                      <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
-                    </svg>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{currentName}</span>
-                  </button>
-                  {modelDropdownOpen && modelDropdownRect && (() => {
-                    const visualViewport = window.visualViewport;
-                    const viewportTop = visualViewport?.offsetTop ?? 0;
-                    const viewportHeight = visualViewport?.height ?? window.innerHeight;
-                    const topGuard = viewportTop + (isMobile ? readSafeAreaInsetPx("top") + MOBILE_AUTOCOMPLETE_TOP_GUARD_PX : DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX);
-                    const bottom = viewportHeight - modelDropdownRect.top + 6;
-                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - topGuard - 6, viewportHeight * 0.6));
-                    // On mobile, pin to a small left margin and cap width to the
-                    // viewport so long model names never push the panel off-screen.
-                    const panelPos: React.CSSProperties = isMobile
-                      ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-                      : { left: modelDropdownRect.left, width: "max-content", minWidth: modelDropdownRect.width };
-                    return (
-                      <div ref={modelDropdownPanelRef} style={{
-                      position: "fixed",
-                      bottom,
-                      ...panelPos,
-                      zIndex: 500, background: "var(--bg)", border: "1px solid var(--border)",
-                      borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                      overflow: "hidden", maxHeight: maxH, overflowY: "auto",
-                      }}>
-                      {modelsByProvider.map((group, gi) => (
-                        <div key={group.provider}>
-                          {(modelsByProvider.length > 1) && (
-                            <div style={{
-                              padding: "6px 12px 4px",
-                              fontSize: 10, fontWeight: 600, color: "var(--text-dim)",
-                              textTransform: "uppercase", letterSpacing: "0.07em",
-                              borderTop: gi > 0 ? "1px solid var(--border)" : "none",
-                            }}>
-                              {group.provider}
-                            </div>
-                          )}
-                          {group.options.map((opt) => {
-                            const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
+              <div ref={dropdownRef} className={styles.modelWrap}>
+                <button
+                  type="button"
+                  className={styles.modelTrigger}
+                  data-open={modelDropdownOpen || undefined}
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
+                    setModelDropdownOpen((open) => !open);
+                  }}
+                  disabled={isStreaming}
+                  aria-haspopup="listbox"
+                  aria-expanded={modelDropdownOpen}
+                  title={`Current model: ${currentName}`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></svg>
+                  <span className={styles.modelName}>{currentName}</span>
+                </button>
+                {modelDropdownOpen && modelDropdownRect && (() => {
+                  const visualViewport = window.visualViewport;
+                  const viewportTop = visualViewport?.offsetTop ?? 0;
+                  const viewportHeight = visualViewport?.height ?? window.innerHeight;
+                  const topGuard = viewportTop + (usesCompactControls ? readSafeAreaInsetPx("top") + MOBILE_AUTOCOMPLETE_TOP_GUARD_PX : DESKTOP_AUTOCOMPLETE_TOP_GUARD_PX);
+                  const bottom = viewportHeight - modelDropdownRect.top + 6;
+                  const maxHeight = Math.max(120, Math.min(modelDropdownRect.top - topGuard - 6, viewportHeight * 0.6));
+                  const position = usesCompactControls
+                    ? { left: 8, right: 8 }
+                    : { left: modelDropdownRect.left, width: "max-content", minWidth: modelDropdownRect.width };
+                  return (
+                    <div
+                      ref={modelDropdownPanelRef}
+                      className={styles.modelPanel}
+                      style={{ bottom, maxHeight, ...position }}
+                      role="listbox"
+                      aria-label="Models"
+                    >
+                      {modelsByProvider.map((group) => (
+                        <div key={group.provider} className={styles.modelGroup}>
+                          {modelsByProvider.length > 1 && <div className={styles.modelGroupLabel}>{group.provider}</div>}
+                          {group.options.map((option) => {
+                            const active = option.modelId === model?.modelId && option.provider === model?.provider;
                             return (
                               <button
-                                key={`${opt.provider}:${opt.modelId}`}
-                                onClick={() => { setModelDropdownOpen(false); if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId); }}
-                                style={{
-                                  display: "flex", alignItems: "center", gap: 8,
-                                  width: "100%", padding: "7px 12px",
-                                  background: isActive ? "var(--bg-selected)" : "none",
-                                  border: "none",
-                                  color: isActive ? "var(--text)" : "var(--text-muted)",
-                                  cursor: "pointer", fontSize: 12, textAlign: "left",
-                                  fontWeight: isActive ? 600 : 400,
-                                  whiteSpace: "nowrap",
+                                key={`${option.provider}:${option.modelId}`}
+                                type="button"
+                                role="option"
+                                aria-selected={active}
+                                className={styles.modelOption}
+                                data-active={active || undefined}
+                                onClick={() => {
+                                  setModelDropdownOpen(false);
+                                  if (!active || isAutoModelSelection) onModelChange(option.provider, option.modelId);
                                 }}
-                                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
                               >
-                                {isActive
-                                  ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                                  : <span style={{ width: 10, flexShrink: 0 }} />}
-                                {opt.name}
+                                <span className={styles.modelCheck}>{active ? "✓" : ""}</span>
+                                {option.name}
                               </button>
                             );
                           })}
                         </div>
                       ))}
                     </div>
-                    );
-                  })()}
-                </div>
-            )}
-            {showOpenAIFastToggle && (
-              <button
-                type="button"
-                onClick={handleOpenAIFastClick}
-                disabled={openAIFastButtonDisabled}
-                title={openAIFastTitle}
-                aria-label="Toggle OpenAI Fast mode"
-                aria-pressed={openAIFastActive}
-                style={{
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 5,
-                  height: 32,
-                  padding: isMobile ? "0 8px" : "8px 10px",
-                  background: "none",
-                  border: "none",
-                  borderRadius: 9,
-                  color: "var(--text-muted)",
-                  cursor: openAIFastButtonDisabled ? "not-allowed" : "pointer",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  opacity: openAIFastButtonDisabled ? 0.5 : 1,
-                  whiteSpace: "nowrap",
-                  transition: "background 0.12s, color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  if (openAIFastButtonDisabled) return;
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                }}
-              >
-                {openAIFastActive && (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                  </svg>
-                )}
-                <span>{isMobile ? openAIFastCompactLabel : openAIFastLabel}</span>
-              </button>
+                  );
+                })()}
+              </div>
             )}
           </div>
 
-          {/* spacer */}
-          {!isMobile && <div style={{ flex: 1 }} />}
-
-          {/* RIGHT: thinking + tools preset + compact + sound (idle) | Stop + sound (streaming) */}
-          <div ref={controlsMenuRef} style={{
-            flex: "0 0 auto",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-end",
-            position: "relative",
-            marginLeft: isMobile ? 0 : "auto",
-          }}>
-            {isMobile && (
-              <button
-                type="button"
-                title={controlsMenuOpen ? undefined : "More controls"}
-                aria-label="More controls"
-                aria-expanded={controlsMenuOpen}
-                aria-hidden={controlsMenuOpen || undefined}
-                tabIndex={controlsMenuOpen ? -1 : undefined}
-                onClick={() => {
-                  setModelDropdownOpen(false);
-                  setControlsMenuOpen(true);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: "100%",
-                  height: 32,
-                  padding: "8px 10px",
-                  background: "none",
-                  border: "none",
-                  borderRadius: 9,
-                  color: "var(--text-muted)",
-                  cursor: controlsMenuOpen ? "default" : "pointer",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  visibility: controlsMenuOpen ? "hidden" : "visible",
-                  pointerEvents: controlsMenuOpen ? "none" : "auto",
-                  transition: "background 0.12s, color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  if (controlsMenuOpen) return;
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text)";
-                }}
-                onMouseLeave={(e) => {
-                  if (controlsMenuOpen) return;
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                }}
-              >
-                More
-              </button>
-            )}
-            <div style={{
-              display: isMobile ? (controlsMenuOpen ? "flex" : "none") : "flex",
-              alignItems: "center",
-              gap: isMobile ? 1 : 2,
-              ...(isMobile ? {
-                position: "absolute",
-                right: 0,
-                bottom: 0,
-                zIndex: 60,
-                padding: 1,
-                width: "max-content",
-                maxWidth: "calc(100vw - 32px)",
-                flexWrap: "nowrap",
-                justifyContent: "flex-end",
-                border: "1px solid color-mix(in srgb, var(--border) 72%, transparent)",
-                borderRadius: 10,
-                background: "color-mix(in srgb, var(--bg-panel) 92%, var(--bg))",
-                boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
-                backdropFilter: "blur(10px)",
-              } : null),
-            }}>
-            {!isStreaming && onThinkingLevelChange && (
-              <div ref={thinkingDropdownRef} style={{ position: "relative" }}>
-                <button
-                  onClick={() => !isStreaming && setThinkingDropdownOpen((v) => !v)}
-                  disabled={isStreaming}
-                  title={`Change reasoning level: ${thinkingDisplayLabel}`}
-                  aria-label="Change reasoning level"
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                    padding: isMobile ? "0 6px" : "8px 12px",
-                    width: isMobile ? "auto" : undefined,
-                    height: 32,
-                    background: thinkingDropdownOpen ? "var(--bg-hover)" : "none",
-                    border: "none",
-                    borderRadius: 9,
-                    color: "var(--text-muted)",
-                    cursor: isStreaming ? "not-allowed" : "pointer",
-                    fontSize: 12,
-                    opacity: isStreaming ? 0.5 : 1,
-                    transition: "background 0.12s, color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isStreaming) return;
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.color = "var(--text)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = thinkingDropdownOpen ? "var(--bg-hover)" : "none";
-                    e.currentTarget.style.color = "var(--text-muted)";
-                  }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" />
-                    <line x1="7" y1="18" x2="12" y2="18" />
-                    <line x1="8" y1="21" x2="11" y2="21" />
-                  </svg>
-                  {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{thinkingDisplayLabel}</span>}
-                </button>
-                {thinkingDropdownOpen && (
-                  <div style={{
-                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                    zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
-                    borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 180,
-                  }}>
-                    {THINKING_LEVELS.filter((lvl) => {
-                      if (!availableThinkingLevels) return true;
-                      if (lvl === "auto") return true;
-                      return availableThinkingLevels.includes(lvl);
-                    }).map((lvl) => {
-                      const isActive = (thinkingLevel ?? "auto") === lvl;
-                      const desc = THINKING_LEVEL_DESC[lvl];
-                      const mappedVal = (lvl !== "auto" && thinkingLevelMap) ? thinkingLevelMap[lvl] : undefined;
-                      const displayLabel = (mappedVal != null && mappedVal !== lvl) ? mappedVal : lvl;
-                      const showOriginal = mappedVal != null && mappedVal !== lvl;
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => { setThinkingDropdownOpen(false); if (!isActive) onThinkingLevelChange(lvl); }}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            width: "100%", padding: "7px 12px",
-                            background: isActive ? "var(--bg-selected)" : "none",
-                            border: "none",
-                            color: isActive ? "var(--text)" : "var(--text-muted)",
-                            cursor: "pointer", fontSize: 12, textAlign: "left",
-                            fontWeight: isActive ? 600 : 400,
-                            whiteSpace: "nowrap",
-                          }}
-                          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                        >
-                          {isActive
-                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                            : <span style={{ width: 10, flexShrink: 0 }} />}
-                          <span style={{ flex: 1 }}>
-                            {displayLabel}
-                            {showOriginal && <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginLeft: 5 }}>({lvl})</span>}
-                          </span>
-                          <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
-                        </button>
-                      );
-                    })}
+          <div className={styles.toolbarRight}>
+            {!usesCompactControls && (
+              <div className={styles.desktopControls}>
+                {showOpenAIFastToggle && (
+                  <button
+                    type="button"
+                    className={styles.control}
+                    data-active={openAIFastActive || undefined}
+                    onClick={handleOpenAIFastClick}
+                    disabled={openAIFastButtonDisabled}
+                    title={openAIFastTitle}
+                    aria-label="Toggle OpenAI Fast mode"
+                    aria-pressed={openAIFastActive}
+                  >
+                    {openAIFastActive && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>}
+                    <span>{openAIFastLabel}</span>
+                  </button>
+                )}
+                {!isStreaming && onThinkingLevelChange && (
+                  <div ref={thinkingDropdownRef} className={styles.reasoningWrap}>
+                    <button
+                      type="button"
+                      className={styles.control}
+                      data-open={thinkingDropdownOpen || undefined}
+                      onClick={() => setThinkingDropdownOpen((open) => !open)}
+                      title={`Change reasoning level: ${thinkingDisplayLabel}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={thinkingDropdownOpen}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" /><line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" /></svg>
+                      <span>{thinkingDisplayLabel}</span>
+                    </button>
+                    {thinkingDropdownOpen && (
+                      <div className={styles.reasoningMenu} role="listbox" aria-label="Reasoning levels">
+                        {THINKING_LEVELS.filter((level) => level === "auto" || !availableThinkingLevels || availableThinkingLevels.includes(level)).map((level) => {
+                          const active = (thinkingLevel ?? "auto") === level;
+                          const mappedValue = level !== "auto" && thinkingLevelMap ? thinkingLevelMap[level] : undefined;
+                          const label = mappedValue != null && mappedValue !== level ? mappedValue : level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              role="option"
+                              aria-selected={active}
+                              className={styles.reasoningOption}
+                              data-active={active || undefined}
+                              onClick={() => { setThinkingDropdownOpen(false); if (!active) onThinkingLevelChange(level); }}
+                            >
+                              <span className={styles.modelCheck}>{active ? "✓" : ""}</span>
+                              <span>{label}{mappedValue != null && mappedValue !== level && <span className={styles.reasoningOriginal}>({level})</span>}</span>
+                              <span className={styles.reasoningDescription}>{THINKING_LEVEL_DESC[level]}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
-            {!isStreaming && profileSelector && (
-              <div style={{ position: "relative", maxWidth: isMobile ? 260 : 360, minWidth: 0 }}>
-                {profileSelector}
-              </div>
-            )}
-
-            {!isStreaming && onCompact && (
-              <div style={{ position: "relative" }}>
-                {compactError && (
-                  <div style={{
-                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                    background: "#1f2937", color: "#f87171",
-                    fontSize: 11, padding: "4px 8px", borderRadius: 5,
-                    whiteSpace: "nowrap", pointerEvents: "none",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 50,
-                  }}>
-                    {compactError}
+                {!isStreaming && profileSelector && <div className={styles.profileControl}>{profileSelector}</div>}
+                <button type="button" className={styles.control} onClick={openPromptEditor} title="Open prompt editor">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3h7v7" /><path d="M10 21H3v-7" /><path d="M21 3l-8 8" /><path d="M3 21l8-8" /></svg>
+                  <span>Editor</span>
+                </button>
+                {!isStreaming && onCompact && (
+                  <div className={styles.compactWrap}>
+                    {compactError && <div className={styles.compactError} role="alert">{compactError}</div>}
+                    <button
+                      type="button"
+                      className={styles.control}
+                      data-danger={isCompacting || undefined}
+                      onClick={isCompacting ? onAbortCompaction : onCompact}
+                      title={isCompacting ? "Stop compaction" : "Compact context"}
+                    >
+                      {isCompacting ? <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" /><line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" /></svg>}
+                      <span>{isCompacting ? "Compacting…" : "Compact"}</span>
+                    </button>
                   </div>
                 )}
-                <button
-                  onClick={isCompacting ? onAbortCompaction : onCompact}
-                  disabled={isStreaming && !isCompacting}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                    padding: isMobile ? "0 6px" : "8px 12px",
-                    width: isMobile ? "auto" : undefined,
-                    height: 32,
-                    background: isCompacting ? "rgba(239,68,68,0.08)" : "none",
-                    border: "none",
-                    borderRadius: 9,
-                    color: isCompacting ? "#ef4444" : "var(--text-muted)",
-                    cursor: (isStreaming && !isCompacting) ? "not-allowed" : "pointer",
-                    fontSize: 12, opacity: (isStreaming && !isCompacting) ? 0.5 : 1,
-                    transition: "background 0.12s, color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isStreaming && !isCompacting) return;
-                    e.currentTarget.style.background = isCompacting ? "rgba(239,68,68,0.16)" : "var(--bg-hover)";
-                    e.currentTarget.style.color = isCompacting ? "#ef4444" : "var(--text)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = isCompacting ? "rgba(239,68,68,0.08)" : "none";
-                    e.currentTarget.style.color = isCompacting ? "#ef4444" : "var(--text-muted)";
-                  }}
-                  title={isCompacting ? "Stop compaction" : "Compact context"}
-                  aria-label={isCompacting ? "Stop compaction" : "Compact context"}
-                >
-                  {isCompacting ? (
-                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>Compacting…</span>}</>
-                  ) : (
-                    <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
-                      <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                    </svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>Compact</span>}</>
-                  )}
-                </button>
+                {onSoundToggle !== undefined && (
+                  <button type="button" className={styles.control} data-icon-only="true" data-active={soundEnabled || undefined} onClick={onSoundToggle} title={soundEnabled ? "Disable completion sound" : "Enable completion sound"} aria-label={soundEnabled ? "Disable completion sound" : "Enable completion sound"}>
+                    {soundEnabled ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></svg>}
+                  </button>
+                )}
               </div>
             )}
 
             {isStreaming && (
-              <button
-                onClick={onAbort}
-                title="Stop agent"
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "8px 14px",
-                  height: 32,
-                  background: "rgba(239,68,68,0.08)",
-                  border: "1px solid rgba(239,68,68,0.3)",
-                  borderRadius: 9,
-                  color: "#ef4444",
-                  cursor: "pointer",
-                  fontSize: 12, fontWeight: 600,
-                  whiteSpace: "nowrap", letterSpacing: "-0.01em",
-                  transition: "background 0.12s",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.16)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.08)"; }}
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
-                </svg>
-                Stop
+              <button type="button" className={styles.control} data-danger="true" onClick={onAbort} title="Stop agent">
+                <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" /></svg>
+                <span>Stop</span>
               </button>
             )}
 
-            {onSoundToggle !== undefined && (
-              <button
-                onClick={onSoundToggle}
-                title={soundEnabled ? "Disable completion sound" : "Enable completion sound"}
-                aria-label={soundEnabled ? "Disable completion sound" : "Enable completion sound"}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                  width: isMobile ? 32 : 32,
-                  height: 32,
-                  padding: 0,
-                  background: "none",
-                  border: "none",
-                  borderRadius: 9,
-                  color: soundEnabled ? "var(--text-muted)" : "var(--text-dim)",
-                  cursor: "pointer",
-                  opacity: soundEnabled ? 1 : 0.55,
-                  transition: "background 0.12s, color 0.12s, opacity 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text)";
-                  e.currentTarget.style.opacity = "1";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = soundEnabled ? "var(--text-muted)" : "var(--text-dim)";
-                  e.currentTarget.style.opacity = soundEnabled ? "1" : "0.55";
-                }}
-              >
-                {soundEnabled ? (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                  </svg>
-                ) : (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                    <line x1="23" y1="9" x2="17" y2="15" />
-                    <line x1="17" y1="9" x2="23" y2="15" />
-                  </svg>
-                )}
-              </button>
-            )}
-            {isMobile && controlsMenuOpen && (
+            {usesCompactControls && (
               <button
                 type="button"
-                title="Collapse controls"
-                aria-label="Collapse controls"
-                aria-expanded={true}
-                onClick={() => {
-                  setThinkingDropdownOpen(false);
-                  setControlsMenuOpen(false);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 36,
-                  height: 32,
-                  padding: 0,
-                  marginLeft: 0,
-                  background: "var(--bg-hover)",
-                  border: "none",
-                  borderLeft: "1px solid color-mix(in srgb, var(--border) 72%, transparent)",
-                  borderRadius: "0 9px 9px 0",
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  transition: "background 0.12s, color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                }}
+                className={styles.control}
+                onClick={() => { setModelDropdownOpen(false); setControlsMenuOpen(true); }}
+                aria-haspopup="dialog"
+                aria-expanded={controlsMenuOpen}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="19" cy="12" r="1" fill="currentColor" /></svg>
+                <span>Options</span>
               </button>
             )}
-            </div>
           </div>
-
         </div>
+
+        <Dialog
+          open={usesCompactControls && controlsMenuOpen}
+          onOpenChange={setControlsMenuOpen}
+          title="Run controls"
+          description="Reasoning, profile, compaction, and completion settings."
+          variant="sheet"
+          size="md"
+        >
+          <div className={styles.controlsSheet}>
+            {onThinkingLevelChange && (
+              <section className={styles.controlsSection}>
+                <h3 className={styles.controlsTitle}>Reasoning</h3>
+                <div className={styles.controlsActions}>
+                  {THINKING_LEVELS.filter((level) => level === "auto" || !availableThinkingLevels || availableThinkingLevels.includes(level)).map((level) => {
+                    const active = (thinkingLevel ?? "auto") === level;
+                    const mappedValue = level !== "auto" && thinkingLevelMap ? thinkingLevelMap[level] : undefined;
+                    const label = mappedValue != null && mappedValue !== level ? mappedValue : level;
+                    return (
+                      <button
+                        key={level}
+                        type="button"
+                        className={styles.control}
+                        data-active={active || undefined}
+                        aria-pressed={active}
+                        disabled={isStreaming}
+                        onClick={() => { if (!active) onThinkingLevelChange(level); }}
+                        title={THINKING_LEVEL_DESC[level]}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+            {profileSelector && (
+              <section className={styles.controlsSection}>
+                <h3 className={styles.controlsTitle}>Capability profile</h3>
+                <div className={styles.profileControl}>{profileSelector}</div>
+              </section>
+            )}
+            <section className={styles.controlsSection}>
+              <h3 className={styles.controlsTitle}>Execution</h3>
+              {compactError && <div className={styles.feedback} data-tone="danger" role="alert">{compactError}</div>}
+              <div className={styles.controlsActions}>
+                <button type="button" className={styles.control} onClick={() => { setControlsMenuOpen(false); openPromptEditor(); }}>
+                  Prompt editor
+                </button>
+                {showOpenAIFastToggle && (
+                  <button type="button" className={styles.control} data-active={openAIFastActive || undefined} onClick={handleOpenAIFastClick} disabled={openAIFastButtonDisabled} aria-pressed={openAIFastActive}>
+                    {openAIFastCompactLabel}
+                  </button>
+                )}
+                {onCompact && !isStreaming && (
+                  <button type="button" className={styles.control} data-danger={isCompacting || undefined} onClick={isCompacting ? onAbortCompaction : onCompact}>
+                    {isCompacting ? "Stop compaction" : "Compact context"}
+                  </button>
+                )}
+                {onSoundToggle !== undefined && (
+                  <button type="button" className={styles.control} data-active={soundEnabled || undefined} onClick={onSoundToggle} aria-pressed={soundEnabled}>
+                    Sound {soundEnabled ? "on" : "off"}
+                  </button>
+                )}
+              </div>
+            </section>
+          </div>
+        </Dialog>
       </div>
     </div>
   );

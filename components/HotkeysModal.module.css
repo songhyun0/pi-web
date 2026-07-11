@@ -1,0 +1,413 @@
+.dialogBody {
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.workspace {
+  width: 100%;
+  min-height: 560px;
+  height: min(730px, calc(100dvh - 190px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.content,
+.loadingState {
+  width: min(100%, 1020px);
+  margin-inline: auto;
+  padding: var(--space-3);
+}
+
+.content {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.loadingState {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.summarySkeletons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.refreshingBar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 4px;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.summary > div {
+  min-width: 0;
+  min-height: 84px;
+  padding: var(--space-1-5);
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  background: var(--bg-raised);
+}
+
+.summary > div[data-warning="true"] {
+  background: color-mix(in srgb, var(--warning) 7%, var(--bg-raised));
+}
+
+.summary span,
+.registrySource span {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.summary strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.summary small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registrySource {
+  padding: var(--space-1-5);
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.registrySource > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-half);
+}
+
+.registrySource code {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registrySource p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-block: var(--space-1);
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(300px, auto);
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.groupList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.shortcutGroup {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.groupHeader h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.groupHeader p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.shortcutList {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.shortcutCard {
+  position: relative;
+  min-width: 0;
+  min-height: 92px;
+  padding: var(--space-1-5);
+  display: grid;
+  grid-template-columns: minmax(240px, 1.1fr) minmax(220px, 0.9fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-raised);
+}
+
+.shortcutCard[data-status="browser-conflict"]::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: var(--warning);
+}
+
+.shortcutIdentity {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.shortcutIdentity h4 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcutIdentity p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcutIdentity code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcutKeys {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  flex-wrap: wrap;
+}
+
+.keyAlternative,
+.keySequence,
+.chord,
+.keyPart {
+  display: inline-flex;
+  align-items: center;
+}
+
+.keyAlternative,
+.keySequence,
+.chord {
+  gap: var(--space-half);
+}
+
+.keyPart {
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.keyPart kbd {
+  min-width: 25px;
+  min-height: 25px;
+  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.thenLabel,
+.orLabel,
+.unboundLabel {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.thenLabel,
+.orLabel {
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+}
+
+.shortcutMeta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-half);
+  flex-wrap: wrap;
+}
+
+.conflictCopy {
+  grid-column: 2 / -1;
+  margin: calc(var(--space-1) * -1) 0 0;
+  color: var(--warning);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.footerStatus {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .shortcutCard {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .shortcutKeys {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .shortcutMeta {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .conflictCopy {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .dialogBody {
+    flex: 1;
+  }
+
+  .workspace {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .content,
+  .loadingState {
+    padding: var(--space-1-5);
+  }
+
+  .summary,
+  .summarySkeletons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .registrySource,
+  .toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolbar {
+    top: calc(var(--space-1-5) * -1);
+  }
+
+  .shortcutCard {
+    min-height: 0;
+    padding: var(--space-1-5);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shortcutIdentity,
+  .shortcutKeys,
+  .shortcutMeta,
+  .conflictCopy {
+    grid-column: 1;
+  }
+
+  .shortcutIdentity { grid-row: 1; }
+  .shortcutKeys { grid-row: 2; }
+  .shortcutMeta { grid-row: 3; justify-content: flex-start; }
+  .conflictCopy { grid-row: 4; }
+
+  .shortcutIdentity p {
+    white-space: normal;
+  }
+
+  .footerStatus {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .keyPart kbd {
+    min-height: 28px;
+  }
+}

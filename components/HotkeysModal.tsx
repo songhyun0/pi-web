@@ -1,7 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, Dialog, EmptyState, Input, Notice, SegmentedControl, Skeleton } from "@/components/ui";
 import { buildWebKeybindings, type WebKeybinding } from "@/lib/web-keybindings";
+import styles from "./HotkeysModal.module.css";
+import {
+  bindingMatches,
+  groupKeybindings,
+  type HotkeyFilter,
+  hotkeyScopeLabel,
+  hotkeySourceLabel,
+  hotkeyStats,
+  hotkeyStatusLabel,
+  hotkeyStatusTone,
+  shortenHotkeyPath,
+  splitKeySequence,
+} from "./hotkeys/helpers";
 
 interface KeybindingsResponse {
   path?: string;
@@ -9,83 +23,203 @@ interface KeybindingsResponse {
   error?: string;
 }
 
+function withOccurrenceIds<T>(values: T[], label: (value: T) => string): Array<{ id: string; value: T; first: boolean }> {
+  const counts = new Map<string, number>();
+  return values.map((value, index) => {
+    const base = label(value);
+    const occurrence = counts.get(base) ?? 0;
+    counts.set(base, occurrence + 1);
+    return { id: `${base}:${occurrence}`, value, first: index === 0 };
+  });
+}
+
+function KeySequence({ combo }: { combo: string }) {
+  const sequence = withOccurrenceIds(splitKeySequence(combo), (chord) => chord.join("+"));
+  return (
+    <span className={styles.keySequence}>
+      {sequence.map(({ id: chordId, value: chord, first: firstChord }) => (
+        <span className={styles.chord} key={chordId}>
+          {!firstChord && <span className={styles.thenLabel}>then</span>}
+          {withOccurrenceIds(chord, (key) => key).map(({ id: keyId, value: key, first: firstKey }) => (
+            <span className={styles.keyPart} key={keyId}>
+              {!firstKey && <span aria-hidden="true">+</span>}
+              <kbd>{key}</kbd>
+            </span>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ShortcutCard({ binding }: { binding: WebKeybinding }) {
+  return (
+    <article className={styles.shortcutCard} data-status={binding.status}>
+      <div className={styles.shortcutIdentity}>
+        <h4>{binding.label}</h4>
+        <p>{binding.description}</p>
+        <code>{binding.action}</code>
+      </div>
+      <div className={styles.shortcutKeys}>
+        {binding.keys.length > 0 ? binding.keys.map((combo, index) => (
+          <span className={styles.keyAlternative} key={combo}>
+            {index > 0 && <span className={styles.orLabel}>or</span>}
+            <KeySequence combo={combo} />
+          </span>
+        )) : <span className={styles.unboundLabel}>No key assigned</span>}
+      </div>
+      <div className={styles.shortcutMeta}>
+        <Badge tone={binding.source === "default" ? "neutral" : "accent"}>{hotkeySourceLabel(binding)}</Badge>
+        <Badge tone={hotkeyStatusTone(binding.status)}>{hotkeyStatusLabel(binding.status)}</Badge>
+      </div>
+      {binding.conflict && <p className={styles.conflictCopy}>{binding.conflict}</p>}
+    </article>
+  );
+}
+
 export function HotkeysModal({ onClose }: { onClose: () => void }) {
+  const searchRef = useRef<HTMLInputElement>(null);
   const [data, setData] = useState<KeybindingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<HotkeyFilter>("all");
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/keybindings", { cache: "no-store" })
-      .then(async (res) => {
-        const body = await res.json() as KeybindingsResponse;
-        if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-        return body;
-      })
-      .then((body) => { if (!cancelled) setData(body); })
-      .catch((error) => { if (!cancelled) setData({ error: error instanceof Error ? error.message : String(error), keybindings: buildWebKeybindings() }); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setData((current) => current ? { ...current, error: undefined } : current);
+    try {
+      const response = await fetch("/api/keybindings", { cache: "no-store", signal });
+      const body = await response.json().catch(() => ({})) as KeybindingsResponse;
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      setData(body);
+    } catch (loadError) {
+      if ((loadError as Error).name === "AbortError") return;
+      setData({
+        error: loadError instanceof Error ? loadError.message : String(loadError),
+        keybindings: buildWebKeybindings(),
+      });
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, []);
 
-  const keybindings = data?.keybindings ?? buildWebKeybindings();
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  const keybindings = useMemo(() => data?.keybindings ?? buildWebKeybindings(), [data]);
+  const stats = useMemo(() => hotkeyStats(keybindings), [keybindings]);
+  const filtered = useMemo(() => keybindings.filter((binding) => bindingMatches(binding, query, filter)), [filter, keybindings, query]);
+  const groups = useMemo(() => groupKeybindings(filtered), [filtered]);
+  const issueCount = stats.conflicts + stats.unbound;
+  const footerStatus = loading
+    ? "Refreshing shortcuts…"
+    : data?.error
+      ? "Showing built-in defaults"
+      : `${filtered.length} of ${keybindings.length} shortcuts`;
+
+  const filterOptions = [
+    { value: "all", label: `All ${keybindings.length}` },
+    { value: "custom", label: `Custom ${stats.custom}` },
+    { value: "issues", label: `Issues ${issueCount}` },
+  ];
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={onClose}>
-      <div onClick={(event) => event.stopPropagation()} style={{ width: "min(860px, 96vw)", maxHeight: "86vh", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg)", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>Keyboard shortcuts</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
-              {data?.path ? `Loaded from ${data.path}` : "Default pi-web shortcuts"}
-            </div>
-          </div>
-          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Close</button>
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}
+      title="Keyboard shortcuts"
+      description={data?.path ? <code>{shortenHotkeyPath(data.path)}</code> : "Web keybinding registry"}
+      variant="adaptive"
+      size="xl"
+      bodyClassName={styles.dialogBody}
+      initialFocusRef={searchRef}
+      footer={
+        <div className={styles.footer}>
+          <span className={styles.footerStatus} aria-live="polite">{footerStatus}</span>
+          <Button loading={loading} disabled={loading} onClick={() => void load()}>Refresh</Button>
+          <Button variant="primary" onClick={onClose}>Close</Button>
         </div>
-        {data?.error && (
-          <div style={{ padding: "10px 16px", color: "var(--error)", background: "color-mix(in srgb, var(--error) 10%, transparent)", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
-            Failed to load custom keybindings: {data.error}
+      }
+    >
+      <div className={styles.workspace} aria-busy={loading || undefined}>
+        {loading && !data ? (
+          <div className={styles.loadingState}>
+            <div className={styles.summarySkeletons}>
+              {[0, 1, 2, 3].map((item) => <Skeleton key={item} height={76} width="100%" />)}
+            </div>
+            <Skeleton height={44} width="100%" />
+            {[0, 1, 2, 3, 4].map((item) => <Skeleton key={item} height={82} width={item % 2 ? "92%" : "100%"} />)}
+          </div>
+        ) : (
+          <div className={styles.content}>
+            {loading && <div className={styles.refreshingBar}><Skeleton height={4} width="100%" /></div>}
+            {data?.error && (
+              <Notice tone="warning" title="Custom shortcuts could not be loaded" actions={<Button size="compact" onClick={() => void load()}>Retry</Button>}>
+                Showing built-in defaults. {data.error}
+              </Notice>
+            )}
+
+            <section className={styles.summary} aria-label="Shortcut summary">
+              <div><span>Total</span><strong>{keybindings.length}</strong><small>Registered web actions</small></div>
+              <div><span>Active</span><strong>{stats.active}</strong><small>Ready to use</small></div>
+              <div><span>Customized</span><strong>{stats.custom}</strong><small>User or extension source</small></div>
+              <div data-warning={issueCount > 0 || undefined}><span>Issues</span><strong>{issueCount}</strong><small>Conflicts or unbound</small></div>
+            </section>
+
+            <section className={styles.registrySource}>
+              <div>
+                <span>Registry source</span>
+                <code title={data?.path}>{data?.path ? shortenHotkeyPath(data.path) : "Built-in pi-web defaults"}</code>
+              </div>
+              <p>Customize shortcuts in the keybinding file, then refresh this view. Browser-reserved combinations remain visible as conflicts.</p>
+            </section>
+
+            <div className={styles.toolbar}>
+              <Input
+                ref={searchRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search actions, keys, or scopes"
+                aria-label="Search keyboard shortcuts"
+              />
+              <SegmentedControl
+                value={filter}
+                options={filterOptions}
+                onValueChange={(value) => setFilter(value as HotkeyFilter)}
+                label="Shortcut filter"
+                fullWidth
+              />
+            </div>
+
+            {keybindings.length === 0 ? (
+              <EmptyState title="No shortcuts registered" description="The web keybinding registry did not return any actions." />
+            ) : groups.length === 0 ? (
+              <EmptyState
+                title="No matching shortcuts"
+                description={query.trim() ? `Nothing matched “${query.trim()}”.` : "No shortcuts match the selected filter."}
+                action={<Button size="compact" onClick={() => { setQuery(""); setFilter("all"); }}>Clear filters</Button>}
+              />
+            ) : (
+              <div className={styles.groupList}>
+                {groups.map((group) => (
+                  <section className={styles.shortcutGroup} key={group.scope}>
+                    <div className={styles.groupHeader}>
+                      <div><h3>{hotkeyScopeLabel(group.scope)}</h3><p>{group.bindings.length} shortcut{group.bindings.length === 1 ? "" : "s"}</p></div>
+                      <Badge tone="neutral">{group.scope}</Badge>
+                    </div>
+                    <div className={styles.shortcutList}>
+                      {group.bindings.map((binding) => <ShortcutCard binding={binding} key={binding.action} />)}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
           </div>
         )}
-        <div style={{ overflow: "auto", padding: 16 }}>
-          {loading ? (
-            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading shortcuts…</div>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ color: "var(--text-muted)", textAlign: "left" }}>
-                  <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Action</th>
-                  <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Keys</th>
-                  <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Scope</th>
-                  <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Source</th>
-                  <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {keybindings.map((binding) => (
-                  <tr key={binding.action}>
-                    <td style={{ padding: "9px 8px", borderBottom: "1px solid var(--border)", verticalAlign: "top" }}>
-                      <div style={{ color: "var(--text)", fontWeight: 500 }}>{binding.label}</div>
-                      <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 2, fontFamily: "var(--font-mono)" }}>{binding.action}</div>
-                      <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4 }}>{binding.description}</div>
-                    </td>
-                    <td style={{ padding: "9px 8px", borderBottom: "1px solid var(--border)", verticalAlign: "top" }}>
-                      {binding.keys.length ? binding.keys.map((key) => (
-                        <kbd key={key} style={{ display: "inline-block", margin: "0 4px 4px 0", padding: "2px 6px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{key}</kbd>
-                      )) : <span style={{ color: "var(--text-dim)" }}>Unbound</span>}
-                    </td>
-                    <td style={{ padding: "9px 8px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)", verticalAlign: "top" }}>{binding.scope}</td>
-                    <td style={{ padding: "9px 8px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)", verticalAlign: "top" }}>{binding.source}{binding.owner ? ` / ${binding.owner}` : ""}</td>
-                    <td style={{ padding: "9px 8px", borderBottom: "1px solid var(--border)", verticalAlign: "top" }}>
-                      <span style={{ color: binding.status === "active" ? "var(--success)" : binding.status === "browser-conflict" ? "var(--warning)" : "var(--text-dim)" }}>{binding.status}</span>
-                      {binding.conflict && <div style={{ color: "var(--text-muted)", fontSize: 11, marginTop: 4 }}>{binding.conflict}</div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
