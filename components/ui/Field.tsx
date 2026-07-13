@@ -88,9 +88,14 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select({ className, mono = false, children, ...props }, ref) {
   const accessibility = useControlAccessibility(props);
   return (
-    <select {...props} {...accessibility} ref={ref} className={cx("pi-select", mono && "pi-control--mono", className)}>
-      {children}
-    </select>
+    <span className="pi-select-shell">
+      <select {...props} {...accessibility} ref={ref} className={cx("pi-select", mono && "pi-control--mono", className)}>
+        {children}
+      </select>
+      <svg className="pi-select__indicator" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="m7 10 5 5 5-5" />
+      </svg>
+    </span>
   );
 });
 

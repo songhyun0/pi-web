@@ -12,41 +12,41 @@
   --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
   --font-mono: var(--font-noto-mono), "JetBrains Mono", "Fira Code", Consolas, ui-monospace, "PingFang SC", "Microsoft YaHei", monospace;
 
-  --bg: #f7f8f8;
-  --bg-panel: #eef1f1;
+  --bg: #f7f7f8;
+  --bg-panel: #f1f1f3;
   --bg-raised: #ffffff;
-  --bg-hover: #e7ebeb;
-  --bg-selected: #dce6e6;
-  --bg-subtle: rgba(35, 69, 75, 0.045);
-  --border: #cdd6d7;
-  --border-strong: #aab8ba;
+  --bg-hover: #ececef;
+  --bg-selected: #e3e3e7;
+  --bg-subtle: rgba(24, 24, 27, 0.035);
+  --border: #e1e1e5;
+  --border-strong: #c9c9cf;
 
-  --text: #182022;
-  --text-muted: #566366;
-  --text-dim: #7a8789;
-  --text-disabled: #929c9e;
+  --text: #18181b;
+  --text-muted: #5f5f66;
+  --text-dim: #6d6d76;
+  --text-disabled: #a1a1aa;
 
-  --accent: #23454b;
-  --accent-hover: #18363b;
+  --accent: #27272a;
+  --accent-hover: #18181b;
   --accent-contrast: #ffffff;
-  --accent-soft: #e3ecec;
-  --focus-ring: #3e7a84;
+  --accent-soft: #ededf0;
+  --focus-ring: #52525b;
 
-  --success: #2f6b48;
-  --warning: #8b631f;
-  --error: #9a4e5a;
+  --success: #347653;
+  --warning: #8a641f;
+  --error: #a34e5b;
   --danger: var(--error);
-  --info: var(--accent);
+  --info: var(--text-muted);
   --success-soft: color-mix(in srgb, var(--success) 10%, transparent);
   --warning-soft: color-mix(in srgb, var(--warning) 10%, transparent);
   --error-soft: color-mix(in srgb, var(--error) 9%, transparent);
-  --info-soft: var(--accent-soft);
+  --info-soft: var(--bg-subtle);
 
-  --user-bg: #eaf1f1;
+  --user-bg: #f1f1f3;
   --assistant-bg: var(--bg);
-  --tool-bg: #f1f4f4;
+  --tool-bg: #f8f8f9;
   --input-bg: var(--bg-raised);
-  --scrim: rgba(8, 15, 16, 0.44);
+  --scrim: rgba(9, 9, 11, 0.42);
 
   --space-half: 4px;
   --space-1: 8px;
@@ -58,24 +58,31 @@
   --space-6: 48px;
   --space-8: 64px;
 
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 9999px;
 
-  --control-compact: 32px;
-  --control-default: 36px;
+  --control-compact: 36px;
+  --control-default: 40px;
   --control-touch: 44px;
 
-  --shadow-raised: 0 1px 2px rgba(13, 31, 33, 0.04), 0 8px 24px rgba(13, 31, 33, 0.06);
-  --shadow-popover: 0 2px 6px rgba(13, 31, 33, 0.06), 0 16px 40px rgba(13, 31, 33, 0.1);
-  --shadow-dialog: 0 4px 12px rgba(13, 31, 33, 0.08), 0 28px 72px rgba(13, 31, 33, 0.14);
+  --mobile-header-height: 56px;
+  --utility-row-height: 44px;
+  --list-row-height: 48px;
+  --content-gutter: 16px;
+  --workspace-center-min: 480px;
 
-  --motion-press: 60ms;
-  --motion-fast: 100ms;
-  --motion-exit: 120ms;
-  --motion-enter: 180ms;
+  --shadow-raised: 0 1px 2px rgba(24, 24, 27, 0.04), 0 8px 24px rgba(24, 24, 27, 0.05);
+  --shadow-popover: 0 2px 6px rgba(24, 24, 27, 0.05), 0 16px 40px rgba(24, 24, 27, 0.09);
+  --shadow-dialog: 0 4px 12px rgba(24, 24, 27, 0.07), 0 28px 72px rgba(24, 24, 27, 0.13);
+
+  --motion-press: 80ms;
+  --motion-fast: 140ms;
+  --motion-exit: 160ms;
+  --motion-enter: 200ms;
   --ease-snap: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
@@ -96,39 +103,39 @@
 html.dark {
   color-scheme: dark;
 
-  --bg: #0f1415;
-  --bg-panel: #151b1c;
-  --bg-raised: #1c2425;
-  --bg-hover: #222c2d;
-  --bg-selected: #273637;
+  --bg: #111113;
+  --bg-panel: #171719;
+  --bg-raised: #1e1e21;
+  --bg-hover: #27272b;
+  --bg-selected: #303035;
   --bg-subtle: rgba(255, 255, 255, 0.04);
-  --border: #2d393b;
-  --border-strong: #435255;
+  --border: #2c2c31;
+  --border-strong: #45454c;
 
-  --text: #ecf1f1;
-  --text-muted: #a1adaf;
-  --text-dim: #718083;
-  --text-disabled: #5f6c6e;
+  --text: #f4f4f5;
+  --text-muted: #b1b1b7;
+  --text-dim: #8b8b94;
+  --text-disabled: #63636b;
 
-  --accent: #6caab1;
-  --accent-hover: #83bbc1;
-  --accent-contrast: #0d1718;
-  --accent-soft: #1d3032;
-  --focus-ring: #83bbc1;
+  --accent: #f4f4f5;
+  --accent-hover: #ffffff;
+  --accent-contrast: #18181b;
+  --accent-soft: #2a2a2e;
+  --focus-ring: #d4d4d8;
 
-  --success: #66a37a;
-  --warning: #d8a95b;
-  --error: #d07b86;
+  --success: #6fa985;
+  --warning: #d4a85e;
+  --error: #d47d89;
   --danger: var(--error);
-  --info: var(--accent);
+  --info: var(--text-muted);
 
-  --user-bg: #172629;
+  --user-bg: #26262b;
   --assistant-bg: var(--bg);
-  --tool-bg: #141c1d;
+  --tool-bg: #171719;
   --input-bg: var(--bg-raised);
   --scrim: rgba(0, 0, 0, 0.64);
 
-  /* Technical dark mode uses tonal elevation and hairlines instead of drop shadows. */
+  /* Dark mode uses tonal elevation instead of decorative shadows. */
   --shadow-raised: none;
   --shadow-popover: none;
   --shadow-dialog: none;

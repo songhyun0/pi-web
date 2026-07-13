@@ -54,6 +54,8 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   size?: ControlSize;
   loading?: boolean;
   selected?: boolean;
+  /** Optional native title tooltip. Accessible naming always comes from `label`. */
+  tooltip?: string | false;
 }
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({
@@ -62,6 +64,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   size = "default",
   loading = false,
   selected = false,
+  tooltip,
   className,
   disabled,
   title,
@@ -80,7 +83,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       aria-busy={loading || undefined}
       aria-pressed={pressed}
-      title={title ?? label}
+      title={tooltip === false ? undefined : tooltip ?? title}
       className={cx("pi-icon-button", className)}
       data-variant={variant}
       data-size={size}
