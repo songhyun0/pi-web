@@ -1,127 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { SessionTreeNode } from "@/lib/types";
-import { filterTreeRows, flattenTree, type TreeFilterMode, type TreeRow } from "@/lib/session-tree-view";
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Dialog } from "@/components/ui/Dialog";
+import { Input, Select } from "@/components/ui/Field";
 import type { ForkCandidate } from "@/hooks/useAgentSession";
-
-type ModalShellProps = {
-  title: string;
-  subtitle: string;
-  width?: string;
-  children: ReactNode;
-  footer: ReactNode;
-  onClose: () => void;
-  onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
-};
-
-function ModalShell({ title, subtitle, width = "min(760px, 100%)", children, footer, onClose, onKeyDownCapture }: ModalShellProps) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 95,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-        background: "rgba(0,0,0,0.18)",
-        boxSizing: "border-box",
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      onKeyDownCapture={onKeyDownCapture}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        style={{
-          width,
-          maxHeight: "min(720px, calc(100% - 40px))",
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid var(--border)",
-          borderRadius: 10,
-          background: "var(--bg)",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
-          overflow: "hidden",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{title}</div>
-            <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>{subtitle}</div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close"
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: "var(--bg-panel)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            ×
-          </button>
-        </div>
-        {children}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
-          {footer}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PrimaryButton({ children, disabled, onClick }: { children: ReactNode; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        padding: "6px 10px",
-        borderRadius: 6,
-        border: disabled ? "1px solid var(--border)" : "1px solid var(--accent)",
-        background: disabled ? "var(--bg-hover)" : "var(--accent)",
-        color: disabled ? "var(--text-dim)" : "#fff",
-        cursor: disabled ? "not-allowed" : "pointer",
-        fontSize: 12,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function SecondaryButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        padding: "6px 10px",
-        borderRadius: 6,
-        border: "1px solid var(--border)",
-        background: "var(--bg)",
-        color: "var(--text-muted)",
-        cursor: "pointer",
-        fontSize: 12,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
+import { filterTreeRows, flattenTree, type TreeFilterMode, type TreeRow } from "@/lib/session-tree-view";
+import type { SessionTreeNode } from "@/lib/types";
 
 function RoleBadge({ role }: { role?: string }) {
   if (!role) return null;
@@ -129,12 +14,12 @@ function RoleBadge({ role }: { role?: string }) {
   const accent = role === "user" ? "var(--accent)" : "var(--text-dim)";
   return (
     <span style={{
-      width: 18,
-      height: 18,
+      width: 20,
+      height: 20,
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: 5,
+      borderRadius: "var(--radius-sm)",
       border: role === "user" ? "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))" : "1px solid var(--border)",
       background: role === "user" ? "color-mix(in srgb, var(--accent) 8%, var(--bg))" : "var(--bg-hover)",
       color: accent,
@@ -183,10 +68,6 @@ export function SessionTreeSelectorModal({
     const activeRowIndex = filteredRows.findIndex((row) => row.isActive);
     setActiveIndex(activeRowIndex >= 0 ? activeRowIndex : 0);
   }, [filteredRows]);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     rowRefs.current.length = filteredRows.length;
@@ -238,83 +119,86 @@ export function SessionTreeSelectorModal({
     }
   }, [labelSaving, onLabelChange]);
 
+  const handleTreeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.dataset.treeLabelEditor === "true") return;
+    const interactiveTarget = target?.closest("button, input, select, textarea, a[href]");
+    const handlesTreeCommands = !interactiveTarget
+      || target === inputRef.current
+      || target?.dataset.treeRowControl === "true";
+    if (!handlesTreeCommands) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.min(Math.max(0, filteredRows.length - 1), idx + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.max(0, idx - 1));
+    } else if (event.key === "PageDown") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.min(Math.max(0, filteredRows.length - 1), idx + 10));
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.max(0, idx - 10));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActiveIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(Math.max(0, filteredRows.length - 1));
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (selected?.hasChildren && !selected.isFolded) toggleFold(selected);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      if (selected?.hasChildren && selected.isFolded) toggleFold(selected);
+    } else if (event.key.toLowerCase() === "l") {
+      event.preventDefault();
+      beginEditLabel(selected);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      void confirm();
+    }
+  }, [beginEditLabel, confirm, filteredRows.length, selected, toggleFold]);
+
   return (
-    <ModalShell
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}
       title="Navigate session tree"
-      subtitle="CLI-style tree · ↑/↓ move · PgUp/PgDn jump · ←/→ fold · L label · Enter navigate"
-      onClose={onClose}
-      onKeyDownCapture={(event) => {
-        if ((event.target as HTMLElement | null)?.dataset.treeLabelEditor === "true") return;
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onClose();
-        } else if (event.key === "ArrowDown") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.min(Math.max(0, filteredRows.length - 1), idx + 1));
-        } else if (event.key === "ArrowUp") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.max(0, idx - 1));
-        } else if (event.key === "PageDown") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.min(Math.max(0, filteredRows.length - 1), idx + 10));
-        } else if (event.key === "PageUp") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.max(0, idx - 10));
-        } else if (event.key === "Home") {
-          event.preventDefault();
-          setActiveIndex(0);
-        } else if (event.key === "End") {
-          event.preventDefault();
-          setActiveIndex(Math.max(0, filteredRows.length - 1));
-        } else if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          if (selected?.hasChildren && !selected.isFolded) toggleFold(selected);
-        } else if (event.key === "ArrowRight") {
-          event.preventDefault();
-          if (selected?.hasChildren && selected.isFolded) toggleFold(selected);
-        } else if (event.key.toLowerCase() === "l") {
-          event.preventDefault();
-          beginEditLabel(selected);
-        } else if (event.key === "Enter") {
-          event.preventDefault();
-          void confirm();
-        }
-      }}
+      description="Arrow keys move · Page keys jump · Left/Right fold · L labels · Enter navigates"
+      variant="adaptive"
+      size="lg"
+      height="viewport"
+      bodyLayout="flush"
+      initialFocusRef={inputRef}
+      closeLabel="Close session tree"
       footer={(
-        <>
-          <label style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, color: "var(--text-muted)", fontSize: 12 }}>
+        <div style={{ width: "100%", minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: "var(--space-2)" }}>
+          <label style={{ minWidth: 0, minHeight: "var(--control-touch)", display: "inline-flex", alignItems: "center", gap: "var(--space-1)", color: "var(--text-muted)", fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={summarize} onChange={(event) => setSummarize(event.target.checked)} />
-            <span>Summarize abandoned branch</span>
+            <span style={{ overflowWrap: "anywhere" }}>Summarize abandoned branch</span>
           </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
-            <PrimaryButton disabled={!selected || navigating} onClick={() => void confirm()}>{navigating ? "Navigating…" : "Navigate"}</PrimaryButton>
+          <div style={{ display: "flex", gap: "var(--space-1)" }}>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" disabled={!selected || navigating} loading={navigating} onClick={() => void confirm()}>{navigating ? "Navigating" : "Navigate"}</Button>
           </div>
-        </>
+        </div>
       )}
     >
-      <div style={{ padding: 14, borderBottom: "1px solid var(--border)", display: "grid", gap: 10 }}>
-        <input
+      <div style={{ width: "100%", maxWidth: "100%", minWidth: 0, minHeight: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }} onKeyDownCapture={handleTreeKeyDown}>
+      <div style={{ width: "100%", minWidth: 0, padding: "var(--space-2) calc(var(--space-2) + var(--pi-safe-area-right)) var(--space-2) calc(var(--space-2) + var(--pi-safe-area-left))", boxSizing: "border-box", borderBottom: "1px solid var(--border)", display: "grid", gap: "var(--space-1-5)" }}>
+        <Input
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search labels, text, tool names, roles, or ids…"
-          style={{
-            width: "100%",
-            padding: "9px 10px",
-            borderRadius: 7,
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-            color: "var(--text)",
-            outline: "none",
-            fontSize: 13,
-          }}
+          aria-label="Search session tree"
+          placeholder="Search labels, text, tool names, roles, or IDs…"
         />
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <select
+        <div style={{ width: "100%", minWidth: 0, display: "flex", gap: "var(--space-1)", alignItems: "center", flexWrap: "wrap" }}>
+          <Select
             value={filterMode}
             onChange={(event) => setFilterMode(event.target.value as TreeFilterMode)}
-            style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--text)", padding: "6px 8px", fontSize: 12 }}
+            aria-label="Filter tree entries"
             title="Filter mode"
           >
             <option value="default">Default</option>
@@ -322,22 +206,22 @@ export function SessionTreeSelectorModal({
             <option value="user-only">User only</option>
             <option value="labeled-only">Labeled only</option>
             <option value="all">All entries</option>
-          </select>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 12 }}>
+          </Select>
+          <label style={{ minHeight: "var(--control-touch)", display: "inline-flex", alignItems: "center", gap: "var(--space-1)", color: "var(--text-muted)", fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={showLabelTimestamps} onChange={(event) => setShowLabelTimestamps(event.target.checked)} />
-            label timestamps
+            Label timestamps
           </label>
-          <button type="button" onClick={() => setFoldedIds(new Set(rows.filter((row) => row.hasChildren && !row.isOnPath).map((row) => row.id)))} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Fold all</button>
-          <button type="button" onClick={() => setFoldedIds(new Set())} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Unfold all</button>
+          <Button size="compact" onClick={() => setFoldedIds(new Set(rows.filter((row) => row.hasChildren && !row.isOnPath).map((row) => row.id)))}>Fold all</Button>
+          <Button size="compact" onClick={() => setFoldedIds(new Set())}>Unfold all</Button>
           <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{filteredRows.length}/{rows.length}</span>
         </div>
-        {labelError && <div style={{ color: "#ef4444", fontSize: 12 }}>{labelError}</div>}
+        {labelError && <div role="alert" style={{ color: "var(--error)", fontSize: 13 }}>{labelError}</div>}
       </div>
-      <div style={{ flex: 1, minHeight: 260, maxHeight: "min(520px, calc(100vh - 250px))", overflowY: "auto", padding: 10 }}>
+      <div style={{ width: "100%", minWidth: 0, flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", padding: "var(--space-1) calc(var(--space-1) + var(--pi-safe-area-right)) var(--space-1) calc(var(--space-1) + var(--pi-safe-area-left))", boxSizing: "border-box" }}>
         {loading ? (
           <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13, textAlign: "center" }}>Loading full session tree…</div>
         ) : error ? (
-          <div style={{ padding: 18, color: "#ef4444", fontSize: 13, textAlign: "center" }}>{error}</div>
+          <div role="alert" style={{ padding: "var(--space-2)", color: "var(--error)", fontSize: 13, textAlign: "center" }}>{error}</div>
         ) : filteredRows.length === 0 ? (
           <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13, textAlign: "center" }}>
             {rows.length === 0 ? "No entries in this session yet" : "No matching tree entries"}
@@ -348,71 +232,95 @@ export function SessionTreeSelectorModal({
             <div key={row.key}>
               <div
                 ref={(node) => { rowRefs.current[index] = node; }}
-                role="button"
-                tabIndex={-1}
-                onClick={() => setActiveIndex(index)}
-                onDoubleClick={() => void confirmRow(row)}
                 style={{
                   width: "100%",
                   minWidth: 0,
+                  minHeight: "var(--control-touch)",
                   display: "flex",
                   alignItems: "center",
-                  gap: 7,
-                  padding: "6px 8px",
-                  borderRadius: 7,
-                  border: active ? "1px solid color-mix(in srgb, var(--accent) 42%, var(--border))" : "1px solid transparent",
-                  background: active ? "color-mix(in srgb, var(--accent) 9%, var(--bg))" : row.isActive ? "var(--bg-selected)" : "transparent",
+                  gap: "var(--space-1)",
+                  padding: "var(--space-half) var(--space-1)",
+                  borderRadius: "var(--radius-md)",
+                  border: 0,
+                  background: active || row.isActive ? "var(--bg-selected)" : "transparent",
                   color: row.isActive ? "var(--text)" : row.isOnPath ? "var(--text-muted)" : "var(--text-dim)",
-                  cursor: "pointer",
-                  textAlign: "left",
                   fontSize: 12,
+                  overflow: "hidden",
                 }}
               >
-                <span style={{ width: Math.max(26, row.depth * 22 + 18), flexShrink: 0, color: row.isOnPath ? "var(--text-muted)" : "var(--text-dim)", fontFamily: "var(--font-mono)", whiteSpace: "pre" }}>{row.connector}</span>
-                <button
-                  type="button"
+                <span style={{ width: Math.min(56, Math.max(26, row.depth * 22 + 18)), overflow: "hidden", flexShrink: 0, color: row.isOnPath ? "var(--text-muted)" : "var(--text-dim)", fontFamily: "var(--font-mono)", whiteSpace: "pre" }}>{row.connector}</span>
+                <IconButton
+                  label={row.hasChildren ? (row.isFolded ? "Unfold branch" : "Fold branch") : "No child branches"}
+                  size="compact"
                   onClick={(event) => { event.stopPropagation(); toggleFold(row); }}
                   disabled={!row.hasChildren}
-                  title={row.hasChildren ? (row.isFolded ? "Unfold" : "Fold") : "No children"}
-                  style={{ width: 16, height: 16, border: "none", background: "transparent", color: row.hasChildren ? "var(--text-dim)" : "transparent", cursor: row.hasChildren ? "pointer" : "default", padding: 0, flexShrink: 0 }}
+                  style={{ flexShrink: 0 }}
                 >
-                  {row.hasChildren ? (row.isFolded ? "▸" : "▾") : "·"}
+                  <span aria-hidden="true">{row.hasChildren ? (row.isFolded ? "▸" : "▾") : "·"}</span>
+                </IconButton>
+                <button
+                  type="button"
+                  onClick={() => setActiveIndex(index)}
+                  onDoubleClick={() => void confirmRow(row)}
+                  aria-current={row.isActive ? "true" : undefined}
+                  data-tree-row-control="true"
+                  style={{ minWidth: 0, minHeight: "var(--control-touch)", flex: 1, display: "flex", alignItems: "center", gap: "var(--space-1)", padding: 0, color: "inherit", background: "transparent", border: 0, cursor: "pointer", textAlign: "left" }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: row.isActive ? "var(--accent)" : row.isOnPath ? "var(--text-muted)" : "var(--border)", flexShrink: 0 }} />
+                  <RoleBadge role={row.role} />
+                  <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: "var(--space-half)", overflow: "hidden", flex: 1 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.title}</span>
+                    {row.skipped > 0 && <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>+{row.skipped}</span>}
+                    {row.label && <span title={row.labelTimestampText ? `Labeled ${row.labelTimestampText}` : "Label"} style={{ color: "var(--text-muted)", fontSize: 10, fontFamily: "var(--font-mono)", flexShrink: 0 }}>#{row.label}{row.labelTimestampText ? ` · ${row.labelTimestampText}` : ""}</span>}
+                    {row.childCount > 1 && <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>{row.childCount} branches</span>}
+                    {row.isActive && <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>current</span>}
+                  </span>
                 </button>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: row.isActive ? "var(--accent)" : row.isOnPath ? "var(--text-muted)" : "var(--border)", flexShrink: 0 }} />
-                <RoleBadge role={row.role} />
-                {row.skipped > 0 && <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>+{row.skipped}</span>}
-                <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.title}</span>
-                  {row.label && <span title={row.labelTimestampText ? `Labeled ${row.labelTimestampText}` : "Label"} style={{ border: "1px solid color-mix(in srgb, var(--accent) 38%, var(--border))", borderRadius: 999, color: "var(--accent)", padding: "1px 6px", fontSize: 10, fontFamily: "var(--font-mono)", flexShrink: 0 }}>#{row.label}{row.labelTimestampText ? ` · ${row.labelTimestampText}` : ""}</span>}
-                </span>
-                {row.childCount > 1 && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>{row.childCount} branches</span>}
-                {onLabelChange && <button type="button" onClick={(event) => { event.stopPropagation(); beginEditLabel(row); }} style={{ border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text-dim)", borderRadius: 5, padding: "2px 5px", fontSize: 10, cursor: "pointer", flexShrink: 0 }}>label</button>}
-                {row.isActive && <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0 }}>current</span>}
+                {onLabelChange && (
+                  <IconButton
+                    label="Edit entry label"
+                    size="compact"
+                    onClick={(event) => { event.stopPropagation(); beginEditLabel(row); }}
+                    style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}
+                  >
+                    <span aria-hidden="true">L</span>
+                  </IconButton>
+                )}
               </div>
               {editingLabelId === row.id && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 8px 8px", paddingLeft: Math.max(34, row.depth * 22 + 34) }}>
-                  <input
+                <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "var(--space-1)", margin: "var(--space-half) var(--space-1) var(--space-1)", paddingInlineStart: Math.min(72, Math.max(34, row.depth * 22 + 34)) }}>
+                  <Input
                     data-tree-label-editor="true"
                     value={labelDraft}
                     onChange={(event) => setLabelDraft(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") { event.preventDefault(); void saveLabel(row, labelDraft.trim() || undefined); }
-                      if (event.key === "Escape") { event.preventDefault(); setEditingLabelId(null); }
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void saveLabel(row, labelDraft.trim() || undefined);
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEditingLabelId(null);
+                      }
                     }}
                     autoFocus
-                    placeholder="Label/bookmark…"
-                    style={{ minWidth: 180, flex: 1, border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)", color: "var(--text)", padding: "6px 8px", fontSize: 12 }}
+                    aria-label="Entry label"
+                    placeholder="Label or bookmark…"
+                    style={{ minWidth: "min(180px, 100%)", flex: "1 1 180px" }}
                   />
-                  <button type="button" disabled={labelSaving} onClick={() => void saveLabel(row, labelDraft.trim() || undefined)} style={{ border: "1px solid var(--accent)", background: "var(--accent)", color: "white", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: labelSaving ? "default" : "pointer" }}>{labelSaving ? "Saving…" : "Save"}</button>
-                  {row.label && <button type="button" disabled={labelSaving} onClick={() => void saveLabel(row, undefined)} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: labelSaving ? "default" : "pointer" }}>Clear</button>}
-                  <button type="button" onClick={() => setEditingLabelId(null)} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", borderRadius: 6, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                  <Button variant="primary" size="compact" loading={labelSaving} onClick={() => void saveLabel(row, labelDraft.trim() || undefined)}>Save</Button>
+                  {row.label && <Button size="compact" disabled={labelSaving} onClick={() => void saveLabel(row, undefined)}>Clear</Button>}
+                  <Button size="compact" disabled={labelSaving} onClick={() => setEditingLabelId(null)}>Cancel</Button>
                 </div>
               )}
             </div>
           );
         })}
       </div>
-    </ModalShell>
+      </div>
+    </Dialog>
   );
 }
 
@@ -466,10 +374,6 @@ export function ForkSelectorModal({
     return () => { cancelled = true; };
   }, [onLoadCandidates]);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
   const filtered = useMemo(() => filterForkCandidates(candidates, query), [candidates, query]);
 
   useEffect(() => {
@@ -494,66 +398,68 @@ export function ForkSelectorModal({
     onClose();
   }, [busyEntryId, disabled, onClose, onFork]);
   const confirm = useCallback(() => confirmCandidate(selected), [confirmCandidate, selected]);
+  const handleForkKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    const interactiveTarget = target?.closest("button, input, select, textarea, a[href]");
+    const handlesForkCommands = !interactiveTarget
+      || target === inputRef.current
+      || target?.dataset.forkRowControl === "true";
+    if (!handlesForkCommands) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.min(Math.max(0, filtered.length - 1), idx + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((idx) => Math.max(0, idx - 1));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      void confirm();
+    }
+  }, [confirm, filtered.length]);
 
   return (
-    <ModalShell
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}
       title="Fork from user message"
-      subtitle="CLI-style fork selector · selected text is restored in the new session editor"
-      onClose={onClose}
-      onKeyDownCapture={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onClose();
-        } else if (event.key === "ArrowDown") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.min(Math.max(0, filtered.length - 1), idx + 1));
-        } else if (event.key === "ArrowUp") {
-          event.preventDefault();
-          setActiveIndex((idx) => Math.max(0, idx - 1));
-        } else if (event.key === "Enter") {
-          event.preventDefault();
-          void confirm();
-        }
-      }}
+      description="Choose a user message to restore in the new session editor. Arrow keys move; Enter forks."
+      variant="adaptive"
+      size="lg"
+      height="viewport"
+      bodyLayout="flush"
+      initialFocusRef={inputRef}
+      closeLabel="Close fork selector"
       footer={(
-        <>
-          <div style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div style={{ width: "100%", minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: "var(--space-2)" }}>
+          <div aria-live="polite" style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {filtered.length} message{filtered.length === 1 ? "" : "s"}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
-            <PrimaryButton disabled={!selected || disabled || Boolean(busyEntryId)} onClick={() => void confirm()}>
-              {busyEntryId ? "Creating…" : "Fork"}
-            </PrimaryButton>
+          <div style={{ display: "flex", gap: "var(--space-1)" }}>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button variant="primary" disabled={!selected || disabled || Boolean(busyEntryId)} loading={Boolean(busyEntryId)} onClick={() => void confirm()}>
+              {busyEntryId ? "Creating" : "Fork"}
+            </Button>
           </div>
-        </>
+        </div>
       )}
     >
-      <div style={{ padding: 14, borderBottom: "1px solid var(--border)" }}>
-        <input
+      <div style={{ width: "100%", maxWidth: "100%", minWidth: 0, minHeight: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }} onKeyDownCapture={handleForkKeyDown}>
+      <div style={{ width: "100%", minWidth: 0, padding: "var(--space-2) calc(var(--space-2) + var(--pi-safe-area-right)) var(--space-2) calc(var(--space-2) + var(--pi-safe-area-left))", boxSizing: "border-box", borderBottom: "1px solid var(--border)" }}>
+        <Input
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          aria-label="Filter user messages"
           placeholder="Filter user messages…"
-          style={{
-            width: "100%",
-            padding: "9px 10px",
-            borderRadius: 7,
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-            color: "var(--text)",
-            outline: "none",
-            fontSize: 13,
-          }}
         />
       </div>
-      <div style={{ flex: 1, minHeight: 260, maxHeight: "min(520px, calc(100vh - 250px))", overflowY: "auto", padding: 10 }}>
+      <div style={{ width: "100%", minWidth: 0, flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", padding: "var(--space-1) calc(var(--space-1) + var(--pi-safe-area-right)) var(--space-1) calc(var(--space-1) + var(--pi-safe-area-left))", boxSizing: "border-box" }}>
         {disabled ? (
           <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13, textAlign: "center" }}>{disabledReason ?? "Fork is not available right now."}</div>
         ) : loading ? (
           <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13, textAlign: "center" }}>Loading user messages…</div>
         ) : error ? (
-          <div style={{ padding: 18, color: "#ef4444", fontSize: 13, textAlign: "center" }}>{error}</div>
+          <div role="alert" style={{ padding: "var(--space-2)", color: "var(--error)", fontSize: 13, textAlign: "center" }}>{error}</div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13, textAlign: "center" }}>
             {candidates.length === 0 ? "No messages to fork from" : "No matching user messages"}
@@ -568,20 +474,23 @@ export function ForkSelectorModal({
               type="button"
               onClick={() => setActiveIndex(index)}
               onDoubleClick={() => void confirmCandidate(candidate)}
+              data-fork-row-control="true"
               style={{
                 width: "100%",
                 minWidth: 0,
+                minHeight: "var(--control-touch)",
                 display: "grid",
                 gridTemplateColumns: "auto minmax(0, 1fr) auto",
-                gap: 10,
+                gap: "var(--space-1-5)",
                 alignItems: "start",
-                padding: "8px 9px",
-                borderRadius: 8,
-                border: active ? "1px solid color-mix(in srgb, var(--accent) 42%, var(--border))" : "1px solid transparent",
-                background: active ? "color-mix(in srgb, var(--accent) 9%, var(--bg))" : "transparent",
+                padding: "var(--space-1) var(--space-1-5)",
+                borderRadius: "var(--radius-md)",
+                border: 0,
+                background: active ? "var(--bg-selected)" : "transparent",
                 color: "var(--text)",
                 cursor: "pointer",
                 textAlign: "left",
+                overflow: "hidden",
               }}
             >
               <span style={{ color: active ? "var(--accent)" : "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, paddingTop: 2 }}>{String(candidates.findIndex((item) => item.entryId === candidate.entryId) + 1).padStart(2, "0")}</span>
@@ -594,6 +503,7 @@ export function ForkSelectorModal({
           );
         })}
       </div>
-    </ModalShell>
+      </div>
+    </Dialog>
   );
 }

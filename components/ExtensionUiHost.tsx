@@ -1,8 +1,12 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Dialog } from "@/components/ui/Dialog";
+import { Field, Input, Textarea } from "@/components/ui/Field";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import type { ExtensionChromeState, ExtensionCompatibilityItem, ExtensionStatusItem, ExtensionUiRequest, ExtensionWidgetItem } from "@/lib/types";
+import styles from "./ExtensionUiHost.module.css";
 
 type ExtensionDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
@@ -24,6 +28,7 @@ export function ExtensionUiHost({
     <>
       {dialog && (
         <ExtensionDialog
+          key={dialog.id}
           request={dialog}
           onRespond={onRespond}
         />
@@ -31,6 +36,7 @@ export function ExtensionUiHost({
 
       {customUi && (
         <ExtensionCustomPanel
+          key={customUi.id}
           request={customUi}
           onInput={onCustomInput}
           onResize={onCustomResize}
@@ -188,11 +194,16 @@ function ExtensionDialog({
   onRespond: (request: ExtensionDialogRequest, response: { value: string } | { confirmed: boolean } | { cancelled: true }) => void;
 }) {
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
+  const initialFocusRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setValue(request.method === "editor" ? request.prefill ?? "" : "");
   }, [request]);
 
+  const captureInitialFocus = (element: HTMLElement | null) => {
+    initialFocusRef.current = element;
+  };
+  const cancel = () => onRespond(request, { cancelled: true });
   const submitValue = () => {
     if (request.method === "confirm") {
       onRespond(request, { confirmed: true });
@@ -201,160 +212,82 @@ function ExtensionDialog({
     }
   };
 
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 90,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-        background: "rgba(0,0,0,0.18)",
-        boxSizing: "border-box",
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        style={{
-          width: "min(560px, 100%)",
-          maxHeight: "calc(100% - 40px)",
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          background: "var(--bg)",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
-          overflow: "hidden",
-        }}
+  const footer = (
+    <div className={styles.dialogActions}>
+      <Button
+        ref={request.method === "confirm" || (request.method === "select" && request.options.length === 0) ? captureInitialFocus : undefined}
+        variant="secondary"
+        onClick={cancel}
       >
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{request.title}</div>
-          <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>extension request</div>
-        </div>
-
-        <div style={{ padding: 14 }}>
-          {request.method === "confirm" && (
-            <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{request.message}</div>
-          )}
-          {request.method === "select" && (
-            <div style={{ display: "grid", gap: 8 }}>
-              {request.options.map((option) => (
-                <button
-                  key={option}
-                  onClick={() => onRespond(request, { value: option })}
-                  style={{
-                    width: "100%",
-                    padding: "9px 10px",
-                    borderRadius: 7,
-                    border: "1px solid var(--border)",
-                    background: "var(--bg-panel)",
-                    color: "var(--text)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 13,
-                  }}
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-          )}
-          {request.method === "input" && (
-            <input
-              autoFocus
-              value={value}
-              placeholder={request.placeholder}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitValue();
-                if (e.key === "Escape") onRespond(request, { cancelled: true });
-              }}
-              style={{
-                width: "100%",
-                padding: "9px 10px",
-                borderRadius: 7,
-                border: "1px solid var(--border)",
-                background: "var(--bg-panel)",
-                color: "var(--text)",
-                outline: "none",
-                fontSize: 13,
-              }}
-            />
-          )}
-          {request.method === "editor" && (
-            <textarea
-              autoFocus
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") onRespond(request, { cancelled: true });
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitValue();
-              }}
-              style={{
-                width: "100%",
-                minHeight: 220,
-                padding: 10,
-                borderRadius: 7,
-                border: "1px solid var(--border)",
-                background: "var(--bg-panel)",
-                color: "var(--text)",
-                outline: "none",
-                resize: "vertical",
-                fontSize: 13,
-                lineHeight: 1.55,
-                fontFamily: "var(--font-mono)",
-              }}
-            />
-          )}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
-          <button
-            onClick={() => onRespond(request, { cancelled: true })}
-            style={{
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: "var(--bg)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-            }}
-          >
-            Cancel
-          </button>
-          {request.method === "confirm" ? (
-            <button
-              onClick={submitValue}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 6,
-                border: "1px solid var(--accent)",
-                background: "var(--accent)",
-                color: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Confirm
-            </button>
-          ) : request.method !== "select" ? (
-            <button
-              onClick={submitValue}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 6,
-                border: "1px solid var(--accent)",
-                background: "var(--accent)",
-                color: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Submit
-            </button>
-          ) : null}
-        </div>
-      </div>
+        Cancel
+      </Button>
+      {request.method === "confirm" ? (
+        <Button variant="primary" onClick={submitValue}>Confirm</Button>
+      ) : request.method !== "select" ? (
+        <Button variant="primary" onClick={submitValue}>Submit</Button>
+      ) : null}
     </div>
+  );
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => { if (!nextOpen) cancel(); }}
+      title={request.title}
+      description="Extension request"
+      size="md"
+      closeLabel={`Cancel ${request.title}`}
+      initialFocusRef={initialFocusRef}
+      className={styles.dialog}
+      bodyClassName={styles.dialogBody}
+      footer={footer}
+    >
+      {request.method === "confirm" && (
+        <p className={styles.confirmMessage}>{request.message}</p>
+      )}
+      {request.method === "select" && (
+        <div className={styles.options}>
+          {request.options.map((option, index) => (
+            <Button
+              key={option}
+              ref={index === 0 ? captureInitialFocus : undefined}
+              variant="secondary"
+              className={styles.option}
+              onClick={() => onRespond(request, { value: option })}
+            >
+              {option}
+            </Button>
+          ))}
+        </div>
+      )}
+      {request.method === "input" && (
+        <Field label="Response">
+          <Input
+            ref={captureInitialFocus}
+            value={value}
+            placeholder={request.placeholder}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) submitValue();
+            }}
+          />
+        </Field>
+      )}
+      {request.method === "editor" && (
+        <Field label="Response" hint="Press Ctrl+Enter or Command+Enter to submit.">
+          <Textarea
+            ref={captureInitialFocus}
+            value={value}
+            mono
+            className={styles.editor}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing) submitValue();
+            }}
+          />
+        </Field>
+      )}
+    </Dialog>
   );
 }
 
@@ -412,8 +345,8 @@ function renderAnsiLine(line: string, keyPrefix: string): ReactNode[] {
 }
 
 function estimateTerminalSize(el: HTMLElement): { columns: number; rows: number } {
-  const width = Math.max(0, el.clientWidth - 28);
-  const height = Math.max(0, el.clientHeight - 48);
+  const width = Math.max(0, el.clientWidth - 32);
+  const height = Math.max(0, el.clientHeight - 32);
   return {
     columns: Math.max(40, Math.min(220, Math.floor(width / 8))),
     rows: Math.max(8, Math.min(100, Math.floor(height / 19))),
@@ -429,26 +362,18 @@ function ExtensionCustomPanel({
   onInput: (request: ExtensionCustomRequest, data: string) => void;
   onResize: (request: ExtensionCustomRequest, size: { columns: number; rows: number }) => void;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLFieldSetElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const composingRef = useRef(false);
   const lastSizeRef = useRef<string>("");
   const displayLines = normalizeCustomPanelLines(request.lines);
-
-  const focusInput = () => {
-    requestAnimationFrame(() => inputRef.current?.focus());
-  };
 
   const sendTextInput = (text: string) => {
     if (!text) return;
     onInput(request, text);
     if (inputRef.current) inputRef.current.value = "";
   };
-
-  useEffect(() => {
-    lastSizeRef.current = "";
-    focusInput();
-  }, [request.id]);
 
   useEffect(() => {
     const el = panelRef.current;
@@ -468,37 +393,44 @@ function ExtensionCustomPanel({
   }, [onResize, request]);
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 95,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-        background: "rgba(0,0,0,0.18)",
-        boxSizing: "border-box",
+    <Dialog
+      open
+      onOpenChange={() => undefined}
+      title="Extension panel"
+      description="Interactive terminal. Escape and Tab are sent to the terminal; press F6 to move focus to Close."
+      size="xl"
+      height="viewport"
+      bodyLayout="flush"
+      dismissible={false}
+      hideClose
+      initialFocusRef={inputRef}
+      onEscapeKeyDown={(event) => {
+        event.preventDefault();
+        onInput(request, "\x1b");
+        inputRef.current?.focus({ preventScroll: true });
       }}
+      className={styles.customDialog}
+      bodyClassName={styles.customBody}
+      footer={(
+        <Button
+          ref={closeRef}
+          variant="secondary"
+          onClick={() => onInput(request, "\x03")}
+          onKeyDown={(event) => {
+            if (event.key !== "F6") return;
+            event.preventDefault();
+            inputRef.current?.focus({ preventScroll: true });
+          }}
+        >
+          Close
+        </Button>
+      )}
     >
-      <div
+      <fieldset
         ref={panelRef}
-        tabIndex={0}
-        role="dialog"
-        aria-modal="true"
-        onMouseDown={() => focusInput()}
-        style={{
-          width: "min(920px, 100%)",
-          maxHeight: "min(760px, calc(100% - 40px))",
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          background: "var(--bg)",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
-          overflow: "hidden",
-          outline: "none",
-        }}
+        aria-label="Extension terminal"
+        className={styles.terminalShell}
+        onPointerDown={() => inputRef.current?.focus({ preventScroll: true })}
       >
         <textarea
           ref={inputRef}
@@ -506,93 +438,57 @@ function ExtensionCustomPanel({
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing || composingRef.current) return;
-            const data = toTerminalKeyData(e, { includePrintable: false });
+          className={styles.terminalInput}
+          onKeyDown={(event) => {
+            if (event.key === "F6") {
+              event.preventDefault();
+              event.stopPropagation();
+              closeRef.current?.focus({ preventScroll: true });
+              return;
+            }
+            if (event.nativeEvent.isComposing || composingRef.current) return;
+            const data = toTerminalKeyData(event, { includePrintable: false });
             if (!data) return;
-            e.preventDefault();
-            e.stopPropagation();
+            event.preventDefault();
+            event.stopPropagation();
             onInput(request, data);
             if (inputRef.current) inputRef.current.value = "";
           }}
-          onBeforeInput={(e) => {
-            const native = e.nativeEvent as InputEvent;
+          onBeforeInput={(event) => {
+            const native = event.nativeEvent as InputEvent;
             if (native.isComposing || composingRef.current) return;
             if (native.inputType === "insertText" && native.data) {
-              e.preventDefault();
+              event.preventDefault();
               sendTextInput(native.data);
             }
           }}
-          onInput={(e) => {
+          onInput={(event) => {
             if (composingRef.current) return;
-            sendTextInput(e.currentTarget.value);
+            sendTextInput(event.currentTarget.value);
           }}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData("text");
+          onPaste={(event) => {
+            const text = event.clipboardData.getData("text");
             if (!text) return;
-            e.preventDefault();
+            event.preventDefault();
             sendTextInput(text);
           }}
           onCompositionStart={() => {
             composingRef.current = true;
           }}
-          onCompositionEnd={(e) => {
+          onCompositionEnd={(event) => {
             composingRef.current = false;
-            sendTextInput(e.data || e.currentTarget.value);
-          }}
-          style={{
-            position: "absolute",
-            width: 1,
-            height: 1,
-            opacity: 0,
-            resize: "none",
-            border: 0,
-            padding: 0,
-            margin: 0,
-            outline: "none",
-            pointerEvents: "none",
+            sendTextInput(event.data || event.currentTarget.value);
           }}
         />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>Extension panel</div>
-          <button
-            onClick={() => onInput(request, "\x03")}
-            style={{
-              padding: "5px 9px",
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: "var(--bg-panel)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-            }}
-          >
-            Close
-          </button>
-        </div>
-        <pre
-          style={{
-            margin: 0,
-            padding: 14,
-            flex: 1,
-            minHeight: 0,
-            overflow: "auto",
-            background: "var(--bg-panel)",
-            color: "var(--text)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            lineHeight: 1.45,
-            whiteSpace: "pre",
-          }}
-        >
+        <section className={styles.terminalOutput} aria-label="Extension terminal output">
           {(displayLines.length ? displayLines : [""]).map((line, index, allLines) => (
             <Fragment key={index}>
               {renderAnsiLine(line, `line-${index}`)}
               {index < allLines.length - 1 ? "\n" : null}
             </Fragment>
           ))}
-        </pre>
-      </div>
-    </div>
+        </section>
+      </fieldset>
+    </Dialog>
   );
 }

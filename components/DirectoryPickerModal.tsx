@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { SAFE_AREA_MODAL_MAX_HEIGHT, SAFE_AREA_MODAL_PADDING } from "@/lib/safe-area";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import styles from "./DirectoryPickerModal.module.css";
+import { Button, Dialog } from "./ui";
 
 interface DirectoryEntry {
   name: string;
@@ -39,6 +45,14 @@ function formatModified(value: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function FolderIcon() {
+  return (
+    <svg className={styles.folderIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2.5h6.5A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Z" />
+    </svg>
+  );
+}
+
 export function DirectoryPickerModal({
   initialPath,
   homeDir,
@@ -50,14 +64,13 @@ export function DirectoryPickerModal({
   onClose,
   onSelect,
 }: Props) {
-  const [mounted, setMounted] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [cwd, setCwd] = useState<string>(initialPath || homeDir || "");
   const [parent, setParent] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const requestSeq = useRef(0);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   const loadPath = useCallback(async (pathToLoad?: string | null) => {
     const seq = ++requestSeq.current;
@@ -72,9 +85,9 @@ export function DirectoryPickerModal({
       setCwd(data.cwd ?? pathToLoad ?? "");
       setParent(data.parent ?? null);
       setEntries(data.entries ?? []);
-    } catch (e) {
+    } catch (cause) {
       if (seq !== requestSeq.current) return;
-      setBrowseError(e instanceof Error ? e.message : String(e));
+      setBrowseError(cause instanceof Error ? cause.message : String(cause));
       setEntries([]);
     } finally {
       if (seq === requestSeq.current) setLoading(false);
@@ -82,12 +95,8 @@ export function DirectoryPickerModal({
   }, []);
 
   useEffect(() => {
-    setMounted(true);
+    setDialogOpen(true);
   }, []);
-
-  useEffect(() => {
-    if (mounted) dialogRef.current?.focus();
-  }, [mounted]);
 
   useEffect(() => {
     void loadPath(initialPath || homeDir || null);
@@ -111,229 +120,122 @@ export function DirectoryPickerModal({
     if (!cwd || busy) return;
     void onSelect(cwd);
   }, [busy, cwd, onSelect]);
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    setDialogOpen(nextOpen);
+    if (!nextOpen) onClose();
+  }, [onClose]);
 
-  if (!mounted) return null;
+  const footerMessage = error ?? (cwd ? `Selected: ${displayPath(cwd, homeDir)}` : "Choose a directory");
 
-  return createPortal(
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: SAFE_AREA_MODAL_PADDING,
-        background: "rgba(0,0,0,0.18)",
-        boxSizing: "border-box",
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        onKeyDownCapture={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onClose();
-          }
-        }}
-        style={{
-          width: "min(760px, 100%)",
-          maxHeight: `min(720px, ${SAFE_AREA_MODAL_MAX_HEIGHT})`,
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid var(--border)",
-          borderRadius: 10,
-          background: "var(--bg)",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
-          overflow: "hidden",
-          outline: "none",
-        }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{title}</div>
-            <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>{subtitle}</div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close"
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: "var(--bg-panel)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            ×
-          </button>
-        </div>
-
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+  return (
+    <Dialog
+      open={dialogOpen}
+      onOpenChange={handleOpenChange}
+      title={title}
+      description={subtitle}
+      closeLabel="Close directory picker"
+      variant="adaptive"
+      size="lg"
+      height="viewport"
+      bodyLayout="flush"
+      initialFocus="panel"
+      className={styles.dialog}
+      bodyClassName={styles.body}
+      footer={
+        <div className={styles.footer}>
           <div
-            title={cwd}
-            style={{
-              padding: "7px 9px",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              background: "var(--bg)",
-              color: "var(--text)",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
+            className={styles.footerStatus}
+            data-error={Boolean(error) || undefined}
+            title={error ?? cwd}
+            aria-live="polite"
           >
-            {cwd ? displayPath(cwd, homeDir) : "Loading…"}
+            {footerMessage}
           </div>
-          {quickLocations.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-              {quickLocations.map((item) => (
-                <button
-                  key={item.path}
-                  type="button"
-                  onClick={() => void loadPath(item.path)}
-                  disabled={loading && item.path === cwd}
-                  style={{
-                    padding: "4px 8px",
-                    border: "1px solid var(--border)",
-                    borderRadius: 999,
-                    background: item.path === cwd ? "var(--bg-selected)" : "var(--bg)",
-                    color: item.path === cwd ? "var(--accent)" : "var(--text-muted)",
-                    cursor: "pointer",
-                    fontSize: 11,
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={{ flex: 1, minHeight: 280, overflowY: "auto", padding: 10 }}>
-          {parent && (
-            <button
-              type="button"
-              onClick={() => void loadPath(parent)}
-              style={{
-                width: "100%",
-                minWidth: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 10px",
-                border: "none",
-                borderRadius: 7,
-                background: "transparent",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                textAlign: "left",
-                fontSize: 12,
-              }}
+          <div className={styles.footerActions}>
+            <Button onClick={() => handleOpenChange(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={!cwd || loading || busy}
+              loading={busy}
+              onClick={selectCurrent}
             >
-              <span style={{ width: 18, color: "var(--text-dim)", fontFamily: "var(--font-mono)", flexShrink: 0 }}>..</span>
-              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Parent directory</span>
-              <span style={{ maxWidth: "45%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                {displayPath(parent, homeDir)}
-              </span>
-            </button>
+              {busy ? "Checking…" : selectLabel}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className={styles.workspace}>
+        <section className={styles.location} aria-label="Current directory">
+          <code className={styles.currentPath} title={cwd}>
+            {cwd ? displayPath(cwd, homeDir) : "Loading…"}
+          </code>
+          {quickLocations.length > 0 && (
+            <nav className={styles.quickLocations} aria-label="Quick locations">
+              {quickLocations.map((item) => {
+                const current = item.path === cwd;
+                return (
+                  <Button
+                    key={item.path}
+                    variant="ghost"
+                    size="compact"
+                    className={styles.quickLocation}
+                    data-current={current || undefined}
+                    aria-current={current ? "location" : undefined}
+                    onClick={() => void loadPath(item.path)}
+                    disabled={loading && current}
+                  >
+                    {item.label}
+                  </Button>
+                );
+              })}
+            </nav>
+          )}
+        </section>
+
+        <section
+          className={styles.directoryList}
+          aria-label={cwd ? `Directories in ${displayPath(cwd, homeDir)}` : "Directories"}
+          aria-busy={loading || undefined}
+        >
+          {parent && (
+            <Button
+              variant="ghost"
+              size="compact"
+              className={styles.directoryRow}
+              onClick={() => void loadPath(parent)}
+              title={parent}
+            >
+              <span className={styles.parentGlyph} aria-hidden="true">..</span>
+              <span className={styles.entryName}>Parent directory</span>
+              <span className={styles.parentPath}>{displayPath(parent, homeDir)}</span>
+            </Button>
           )}
 
           {loading ? (
-            <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 12, textAlign: "center" }}>Loading directories…</div>
+            <output className={styles.state}>Loading directories…</output>
           ) : browseError ? (
-            <div style={{ padding: 18, color: "#ef4444", fontSize: 12, textAlign: "center", overflowWrap: "anywhere" }}>{browseError}</div>
+            <div className={styles.state} data-error="true" role="alert">{browseError}</div>
           ) : entries.length === 0 ? (
-            <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 12, textAlign: "center" }}>No subdirectories</div>
+            <div className={styles.state}>No subdirectories</div>
           ) : (
             entries.map((entry) => (
-              <button
+              <Button
                 key={entry.path}
-                type="button"
+                variant="ghost"
+                size="compact"
+                className={styles.directoryRow}
                 onClick={() => void loadPath(entry.path)}
                 title={entry.path}
-                style={{
-                  width: "100%",
-                  minWidth: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 10px",
-                  border: "none",
-                  borderRadius: 7,
-                  background: "transparent",
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontSize: 12,
-                }}
-                onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                  <path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2.5h6.5A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Z" />
-                </svg>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.name}</span>
-                <span style={{ color: "var(--text-dim)", fontSize: 11, flexShrink: 0 }}>{formatModified(entry.modified)}</span>
-              </button>
+                <FolderIcon />
+                <span className={styles.entryName}>{entry.name}</span>
+                <span className={styles.entryModified}>{formatModified(entry.modified)}</span>
+              </Button>
             ))
           )}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
-          <div style={{ flex: 1, minWidth: 0, color: error ? "#ef4444" : "var(--text-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={error ?? cwd}>
-            {error ?? (cwd ? `Selected: ${displayPath(cwd, homeDir)}` : "Choose a directory")}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 6,
-                border: "1px solid var(--border)",
-                background: "var(--bg)",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!cwd || loading || busy}
-              onClick={selectCurrent}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 6,
-                border: !cwd || loading || busy ? "1px solid var(--border)" : "1px solid var(--accent)",
-                background: !cwd || loading || busy ? "var(--bg-hover)" : "var(--accent)",
-                color: !cwd || loading || busy ? "var(--text-dim)" : "#fff",
-                cursor: !cwd || loading || busy ? "not-allowed" : "pointer",
-                fontSize: 12,
-              }}
-            >
-              {busy ? "Checking…" : selectLabel}
-            </button>
-          </div>
-        </div>
+        </section>
       </div>
-    </div>,
-    document.body
+    </Dialog>
   );
 }
