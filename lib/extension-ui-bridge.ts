@@ -1,3 +1,4 @@
+import { Theme } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
 import type { ExtensionUiContextLike } from "./pi-types";
 import type { ExtensionChromeState, ExtensionCompatibilityItem, ExtensionStatusItem, ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
@@ -113,15 +114,6 @@ type ExtensionUiBridgeOptions = {
   emit: (event: ExtensionUiAgentEvent) => void;
 };
 
-type ThemeLike = {
-  fg: (token: string, text: string) => string;
-  bg: (token: string, text: string) => string;
-  bold: (text: string) => string;
-  dim: (text: string) => string;
-  italic: (text: string) => string;
-  underline: (text: string) => string;
-  strikethrough: (text: string) => string;
-};
 
 const DEFAULT_CUSTOM_COLUMNS = 92;
 const DEFAULT_CUSTOM_ROWS = 32;
@@ -151,16 +143,31 @@ function sgr(codes: number[], text: string): string {
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
 }
 
-function createCompatTheme(): ThemeLike {
-  return {
-    fg: (token, text) => sgr([ANSI_FG[token] ?? 39], text),
-    bg: (token, text) => sgr([ANSI_BG[token] ?? 49], text),
-    bold: (text) => sgr([1], text),
-    dim: (text) => sgr([2], text),
-    italic: (text) => sgr([3], text),
-    underline: (text) => sgr([4], text),
-    strikethrough: (text) => sgr([9], text),
-  };
+class CompatTheme extends Theme {
+  constructor() {
+    super(
+      { thinkingXhigh: "" } as ConstructorParameters<typeof Theme>[0],
+      {} as ConstructorParameters<typeof Theme>[1],
+      "truecolor",
+    );
+  }
+
+  override fg(...[token, text]: Parameters<Theme["fg"]>): string { return sgr([ANSI_FG[token] ?? 39], text); }
+  override bg(...[token, text]: Parameters<Theme["bg"]>): string { return sgr([ANSI_BG[token] ?? 49], text); }
+  override bold(text: string): string { return sgr([1], text); }
+  dim(text: string): string { return sgr([2], text); }
+  override italic(text: string): string { return sgr([3], text); }
+  override underline(text: string): string { return sgr([4], text); }
+  override inverse(text: string): string { return sgr([7], text); }
+  override strikethrough(text: string): string { return sgr([9], text); }
+  override getFgAnsi(...[token]: Parameters<Theme["getFgAnsi"]>): string { return `\x1b[${ANSI_FG[token] ?? 39}m`; }
+  override getBgAnsi(...[token]: Parameters<Theme["getBgAnsi"]>): string { return `\x1b[${ANSI_BG[token] ?? 49}m`; }
+  override getThinkingBorderColor(): (text: string) => string { return (text) => text; }
+  override getBashModeBorderColor(): (text: string) => string { return (text) => text; }
+}
+
+function createCompatTheme(): CompatTheme {
+  return new CompatTheme();
 }
 
 function normalizeLines(value: unknown): string[] | null {
@@ -402,7 +409,7 @@ export class ExtensionUiBridge {
       addAutocompleteProvider: (provider) => this.addAutocompleteProvider(provider),
       setEditorComponent: (component) => this.setEditorComponent(component),
       getEditorComponent: () => undefined,
-      get theme() { return createCompatTheme(); },
+      theme: this.theme,
       getAllThemes: () => this.getAllThemes(),
       getTheme: (name) => this.getTheme(name),
       setTheme: (theme) => this.setTheme(theme),

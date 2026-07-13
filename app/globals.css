@@ -190,14 +190,19 @@ pre, code {
 }
 .markdown-body .task-list-item {
   display: block;
-  padding-left: 0;
+  position: relative;
+  padding-left: 25px;
 }
 .markdown-body .task-list-item::marker { content: ""; }
-.markdown-body .task-list-item input[type="checkbox"] {
+.markdown-body .task-list-item > input[type="checkbox"],
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child {
   appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0.35em;
   width: 14px;
   height: 14px;
-  margin: 0 7px 0 0;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--bg);
@@ -205,11 +210,13 @@ pre, code {
   vertical-align: -2px;
   place-content: center;
 }
-.markdown-body .task-list-item input[type="checkbox"]:checked {
+.markdown-body .task-list-item > input[type="checkbox"]:checked,
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child:checked {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, var(--bg));
 }
-.markdown-body .task-list-item input[type="checkbox"]:checked::before {
+.markdown-body .task-list-item > input[type="checkbox"]:checked::before,
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child:checked::before {
   content: "";
   width: 4px;
   height: 8px;

@@ -4,6 +4,7 @@ import type {
   SettingsManager,
   SlashCommandInfo,
   SourceInfo,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
 
 export interface ContextUsage {
@@ -125,7 +126,7 @@ export interface ExtensionUiContextLike {
   addAutocompleteProvider(provider: unknown): void | (() => void);
   setEditorComponent(component?: unknown): void;
   getEditorComponent(): undefined;
-  readonly theme: unknown;
+  readonly theme: Theme;
   getAllThemes(): unknown[];
   getTheme(name: string): unknown;
   setTheme(theme: unknown): { success: boolean; error?: string };
