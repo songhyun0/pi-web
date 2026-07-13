@@ -21,6 +21,10 @@ interface Props {
   hasSession?: boolean;
   /** When inline, render icon-only (no text label) to save horizontal space */
   compact?: boolean;
+  /** Render only the controlled floating panel; used by compact overflow chrome. */
+  popupOnly?: boolean;
+  /** Focus target restored when a popup-only panel is dismissed. */
+  restoreFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 function hasBranch(nodes: SessionTreeNode[]): boolean {
@@ -79,10 +83,12 @@ function TreeRowView({ row, onSelect, onToggleFold }: { row: TreeRow; onSelect: 
   );
 }
 
-export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact }: Props) {
+export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact, popupOnly, restoreFocusRef }: Props) {
   const [openInternal, setOpenInternal] = useState(false);
   const open = openProp !== undefined ? openProp : openInternal;
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const panelId = useId();
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -106,6 +112,29 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
       window.removeEventListener("resize", update);
     };
   }, [open, inline, containerRef]);
+
+  const dismissInlinePanel = useCallback(() => {
+    if (onToggle) onToggle();
+    else setOpenInternal(false);
+    window.requestAnimationFrame(() => restoreFocusRef?.current?.focus({ preventScroll: true }));
+  }, [onToggle, restoreFocusRef]);
+
+  useEffect(() => {
+    if (!open || !inline || !popupOnly || !dropdownPos) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      (searchRef.current ?? panelRef.current)?.focus({ preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      dismissInlinePanel();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [dismissInlinePanel, dropdownPos, inline, open, popupOnly]);
 
   const rows = useMemo(() => flattenTree(tree, activeLeafId, { foldedIds, showLabelTimestamps: true }), [activeLeafId, foldedIds, tree]);
   const filteredRows = useMemo(() => filterTreeRows(rows, query, filterMode), [filterMode, query, rows]);
@@ -148,6 +177,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
     <div className={styles.panel}>
       <div className={styles.filters}>
         <input
+          ref={searchRef}
           className={styles.search}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -176,6 +206,21 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
   );
 
   if (inline) {
+    const floatingPanel = open && dropdownPos ? (
+      <section
+        ref={panelRef}
+        id={panelId}
+        className={styles.floatingPanel}
+        style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width }}
+        tabIndex={popupOnly ? -1 : undefined}
+        aria-label="Session tree"
+      >
+        {panel}
+      </section>
+    ) : null;
+
+    if (popupOnly) return floatingPanel;
+
     return (
       <div className={styles.inlineRoot}>
         <button
@@ -192,15 +237,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           {branchIcon}
           {!compact && <span>Branches</span>}
         </button>
-        {open && dropdownPos && (
-          <div
-            id={panelId}
-            className={styles.floatingPanel}
-            style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width }}
-          >
-            {panel}
-          </div>
-        )}
+        {floatingPanel}
       </div>
     );
   }

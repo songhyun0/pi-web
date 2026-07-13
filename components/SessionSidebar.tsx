@@ -408,9 +408,18 @@ export function SessionSidebar({
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const restoreDirectoryPickerFocus = useCallback(() => {
+    window.setTimeout(() => {
+      const trigger = dropdownRef.current?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    }, 50);
+  }, []);
+
   useEffect(() => {
+    const wasOpen = directoryPickerOpenRef.current;
     directoryPickerOpenRef.current = directoryPickerOpen;
-  }, [directoryPickerOpen]);
+    if (wasOpen && !directoryPickerOpen) restoreDirectoryPickerFocus();
+  }, [directoryPickerOpen, restoreDirectoryPickerFocus]);
 
   useEffect(() => {
     if (isMobile && mobileMode === "explorer" && !selectedCwd && !selectedCwdProp) setMobileMode("sessions");
@@ -937,30 +946,30 @@ export function SessionSidebar({
         <div className={styles.topRow}>
           <PiAgentTitle appName={appName} />
           <div className={styles.headerActions}>
-            <Button
+            <IconButton
+              label="New session"
               size={isMobile ? "touch" : "compact"}
-              variant="primary"
               className={styles.newButton}
-              leadingIcon={
-                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="1" x2="6" y2="11" /><line x1="1" y1="6" x2="11" y2="6" /></svg>
-              }
               onClick={handleNewSession}
             >
-              New
-            </Button>
-            <IconButton
-              label={sessionRefreshDone ? "Sessions refreshed" : "Refresh sessions"}
-              size={isMobile ? "touch" : "compact"}
-              className={styles.headerIcon}
-              data-complete={sessionRefreshDone || undefined}
-              onClick={() => loadSessions(false)}
-            >
-              {sessionRefreshDone ? (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
-              ) : (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
-              )}
+              <svg width="16" height="16" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="1" x2="6" y2="11" /><line x1="1" y1="6" x2="11" y2="6" /></svg>
             </IconButton>
+            {(!isMobile || mobileMode === "sessions") && (
+              <IconButton
+                label={sessionRefreshDone ? "Sessions refreshed" : "Refresh sessions"}
+                tooltip={false}
+                size={isMobile ? "touch" : "compact"}
+                className={styles.headerIcon}
+                data-complete={sessionRefreshDone || undefined}
+                onClick={() => loadSessions(false)}
+              >
+                {sessionRefreshDone ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+                )}
+              </IconButton>
+            )}
             {onRequestClose && (
               <IconButton label="Close workspace navigator" size={isMobile ? "touch" : "compact"} className={styles.headerIcon} onClick={onRequestClose}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
@@ -1101,7 +1110,6 @@ export function SessionSidebar({
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
               </span>
               <PathLabel text={currentWorktree ? currentWorktree.branch ?? displayCwd(currentWorktree.path, homeDir) : "Loading worktree…"} />
-              {worktreeState.worktrees.length > 1 && <span className={styles.triggerMeta}>{worktreeState.worktrees.length}</span>}
               <svg className={styles.chevron} data-open={wtDropdownOpen || undefined} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="2 3.5 5 6.5 8 3.5" /></svg>
             </button>
 
@@ -1291,6 +1299,7 @@ export function SessionSidebar({
             </button>
             <IconButton
               label={explorerRefreshDone ? "Explorer refreshed" : "Refresh explorer"}
+              tooltip={false}
               size={isMobile ? "touch" : "compact"}
               className={styles.explorerRefresh}
               data-complete={explorerRefreshDone || undefined}
@@ -1329,7 +1338,11 @@ export function SessionSidebar({
           selectLabel={newSessionPickMode ? "Start session here" : "Open this directory"}
           busy={customPathValidating}
           error={customPathError}
-          onClose={() => { setDirectoryPickerOpen(false); setNewSessionPickMode(false); setCustomPathError(null); }}
+          onClose={() => {
+            setDirectoryPickerOpen(false);
+            setNewSessionPickMode(false);
+            setCustomPathError(null);
+          }}
           onSelect={commitCustomPath}
         />
       )}

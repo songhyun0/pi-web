@@ -4,7 +4,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useForkComposerFocus } from "@/hooks/useForkComposerFocus";
 import { useTheme } from "@/hooks/useTheme";
-import { useViewportTier } from "@/hooks/useViewportTier";
+import {
+  DESKTOP_CENTER_MIN_WIDTH,
+  fitDesktopPanelWidths,
+  getCenterChromeDensity,
+  getDesktopPanelMaxWidths,
+  RIGHT_PANEL_MAX_WIDTH,
+  RIGHT_PANEL_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  useObservedElementWidth,
+  useViewportTier,
+} from "@/hooks/useViewportTier";
 import { type AppSettings, DEFAULT_APP_SETTINGS } from "@/lib/app-settings";
 import { copyText } from "@/lib/clipboard";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
@@ -46,31 +57,26 @@ type ResizingPanel = "sidebar" | "right";
 const SIDEBAR_WIDTH_STORAGE_KEY = "pi-sidebar-width";
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "pi-right-panel-width";
 const SIDEBAR_DEFAULT_WIDTH = 288;
-const SIDEBAR_MIN_WIDTH = 240;
-const SIDEBAR_MAX_WIDTH = 520;
 const RIGHT_PANEL_DEFAULT_WIDTH = 560;
-const RIGHT_PANEL_MIN_WIDTH = 300;
-const RIGHT_PANEL_MAX_WIDTH = 960;
-const OVERLAY_BREAKPOINT = 1024;
 
 function clampWidth(value: number, min: number, max: number): number {
   const safeMax = Math.max(min, max);
   return Math.min(Math.max(Math.round(value), min), safeMax);
 }
 
-function getSidebarMaxWidth(): number {
-  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return SIDEBAR_MAX_WIDTH;
-  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.floor(window.innerWidth * 0.5)));
-}
-
-function getRightPanelMaxWidth(): number {
-  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return RIGHT_PANEL_MAX_WIDTH;
-  return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, Math.floor(window.innerWidth * 0.75)));
+function getViewportWidth(): number {
+  return typeof window === "undefined" ? Number.MAX_SAFE_INTEGER : window.innerWidth;
 }
 
 function getRightPanelDefaultWidth(): number {
-  if (typeof window === "undefined" || window.innerWidth <= OVERLAY_BREAKPOINT) return RIGHT_PANEL_DEFAULT_WIDTH;
-  return clampWidth(Math.round(window.innerWidth * 0.42), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth());
+  const viewportWidth = getViewportWidth();
+  const max = getDesktopPanelMaxWidths(
+    viewportWidth,
+    { sidebar: SIDEBAR_DEFAULT_WIDTH, right: RIGHT_PANEL_DEFAULT_WIDTH },
+    true,
+    false,
+  ).right;
+  return clampWidth(Math.round(viewportWidth * 0.42), RIGHT_PANEL_MIN_WIDTH, max);
 }
 
 function readStoredWidth(key: string, fallback: number, min: number, max: number): number {
@@ -89,6 +95,7 @@ export function AppShell() {
   const { isDark, toggleTheme } = useTheme();
   const viewportTier = useViewportTier();
   const usesOverlayLayout = viewportTier !== "desktop";
+  const isPhoneLayout = viewportTier === "phone";
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -108,8 +115,8 @@ export function AppShell() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [inspectorFileSheetOpen, setInspectorFileSheetOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
-  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
+  const [panelWidths, setPanelWidths] = useState({ sidebar: SIDEBAR_DEFAULT_WIDTH, right: RIGHT_PANEL_DEFAULT_WIDTH });
+  const { sidebar: sidebarWidth, right: rightPanelWidth } = panelWidths;
   const [layoutPrefsLoaded, setLayoutPrefsLoaded] = useState(false);
   const [resizingPanel, setResizingPanel] = useState<ResizingPanel | null>(null);
   const sidebarPanelRef = useRef<HTMLElement>(null);
@@ -169,6 +176,7 @@ export function AppShell() {
       }
       setInspectorFileSheetOpen(false);
       setMobileMoreOpen(false);
+      setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, true, rightPanelOpen));
       setSidebarOpen(true);
       return;
     }
@@ -180,7 +188,7 @@ export function AppShell() {
     syncHistoryLayers();
     window.addEventListener("popstate", syncHistoryLayers);
     return () => window.removeEventListener("popstate", syncHistoryLayers);
-  }, [applyWorkspaceLayer, usesOverlayLayout]);
+  }, [applyWorkspaceLayer, rightPanelOpen, usesOverlayLayout]);
 
   useEffect(() => {
     if (!usesOverlayLayout || (!sidebarOpen && !rightPanelOpen)) return;
@@ -231,8 +239,11 @@ export function AppShell() {
   }, [appSettings.displayName]);
 
   useEffect(() => {
-    setSidebarWidth(readStoredWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
-    setRightPanelWidth(readStoredWidth(RIGHT_PANEL_WIDTH_STORAGE_KEY, getRightPanelDefaultWidth(), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+    const storedWidths = {
+      sidebar: readStoredWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+      right: readStoredWidth(RIGHT_PANEL_WIDTH_STORAGE_KEY, getRightPanelDefaultWidth(), RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH),
+    };
+    setPanelWidths(fitDesktopPanelWidths(window.innerWidth, storedWidths, true, false));
     setLayoutPrefsLoaded(true);
   }, []);
 
@@ -248,16 +259,20 @@ export function AppShell() {
 
   useEffect(() => {
     const handleResize = () => {
-      setSidebarWidth((width) => clampWidth(width, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
-      setRightPanelWidth((width) => clampWidth(width, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+      setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, sidebarOpen, rightPanelOpen));
     };
+    handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  }, [rightPanelOpen, sidebarOpen]);
 
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const queueForkComposerFocus = useForkComposerFocus(chatInputRef, selectedSession?.id ?? null);
+  const centerPanelRef = useRef<HTMLElement>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const compactMoreButtonRef = useRef<HTMLButtonElement>(null);
+  const centerWidth = useObservedElementWidth(centerPanelRef);
+  const chromeDensity = usesOverlayLayout ? "compact" : getCenterChromeDensity(centerWidth);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -328,8 +343,12 @@ export function AppShell() {
       else openWorkspaceLayer("sessions");
       return;
     }
-    setSidebarOpen((open) => !open);
-  }, [closeWorkspaceLayer, openWorkspaceLayer, sidebarOpen, usesOverlayLayout]);
+    const nextOpen = !sidebarOpen;
+    if (nextOpen) {
+      setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, true, rightPanelOpen));
+    }
+    setSidebarOpen(nextOpen);
+  }, [closeWorkspaceLayer, openWorkspaceLayer, rightPanelOpen, sidebarOpen, usesOverlayLayout]);
 
   const handleSidebarClose = useCallback(() => {
     setActiveTopPanel(null);
@@ -338,11 +357,12 @@ export function AppShell() {
   }, [closeWorkspaceLayer, usesOverlayLayout]);
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (usesOverlayLayout || !sidebarOpen) return;
+    if (isPhoneLayout || !sidebarOpen || event.button !== 0) return;
     event.preventDefault();
     setActiveTopPanel(null);
     setResizingPanel("sidebar");
 
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     const previousCursor = document.body.style.cursor;
@@ -350,7 +370,8 @@ export function AppShell() {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
 
-    const stopResize = () => {
+    const stopResize = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
       setResizingPanel(null);
@@ -359,21 +380,27 @@ export function AppShell() {
       window.removeEventListener("pointercancel", stopResize);
     };
     const handleMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
-      setSidebarWidth(clampWidth(startWidth + moveEvent.clientX - startX, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+      setPanelWidths((current) => {
+        const desktopMax = getDesktopPanelMaxWidths(window.innerWidth, current, true, rightPanelOpen).sidebar;
+        const max = usesOverlayLayout ? Math.min(desktopMax, window.innerWidth - 48) : desktopMax;
+        return { ...current, sidebar: clampWidth(startWidth + moveEvent.clientX - startX, SIDEBAR_MIN_WIDTH, max) };
+      });
     };
 
     window.addEventListener("pointermove", handleMove, { passive: false });
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
-  }, [sidebarOpen, sidebarWidth, usesOverlayLayout]);
+  }, [isPhoneLayout, rightPanelOpen, sidebarOpen, sidebarWidth, usesOverlayLayout]);
 
   const startRightPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (usesOverlayLayout) return;
+    if (isPhoneLayout || event.button !== 0) return;
     event.preventDefault();
     setActiveTopPanel(null);
     setResizingPanel("right");
 
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startWidth = rightPanelWidth;
     const previousCursor = document.body.style.cursor;
@@ -381,7 +408,8 @@ export function AppShell() {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
 
-    const stopResize = () => {
+    const stopResize = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
       setResizingPanel(null);
@@ -390,14 +418,19 @@ export function AppShell() {
       window.removeEventListener("pointercancel", stopResize);
     };
     const handleMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
-      setRightPanelWidth(clampWidth(startWidth - (moveEvent.clientX - startX), RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
+      setPanelWidths((current) => {
+        const desktopMax = getDesktopPanelMaxWidths(window.innerWidth, current, sidebarOpen, true).right;
+        const max = usesOverlayLayout ? Math.min(desktopMax, window.innerWidth - 48) : desktopMax;
+        return { ...current, right: clampWidth(startWidth - (moveEvent.clientX - startX), RIGHT_PANEL_MIN_WIDTH, max) };
+      });
     };
 
     window.addEventListener("pointermove", handleMove, { passive: false });
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
-  }, [rightPanelWidth, usesOverlayLayout]);
+  }, [isPhoneLayout, rightPanelWidth, sidebarOpen, usesOverlayLayout]);
 
   useEffect(() => {
     const topBar = topBarRef.current;
@@ -416,7 +449,6 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelView, setRightPanelView] = useState<"changes" | "terminal" | "file">("changes");
-  const [gitChangesCount, setGitChangesCount] = useState<number | null>(null);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -558,8 +590,11 @@ export function AppShell() {
   const revealInspector = useCallback(() => {
     setActiveTopPanel(null);
     if (usesOverlayLayout) openWorkspaceLayer("inspector");
-    else setRightPanelOpen(true);
-  }, [openWorkspaceLayer, usesOverlayLayout]);
+    else {
+      setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, sidebarOpen, true));
+      setRightPanelOpen(true);
+    }
+  }, [openWorkspaceLayer, sidebarOpen, usesOverlayLayout]);
 
   const hideInspector = useCallback(() => {
     if (usesOverlayLayout) closeWorkspaceLayer();
@@ -671,10 +706,13 @@ export function AppShell() {
       case "openSessionSidebar":
         setActiveTopPanel(null);
         if (usesOverlayLayout) openWorkspaceLayer("sessions");
-        else setSidebarOpen(true);
+        else {
+          setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, true, rightPanelOpen));
+          setSidebarOpen(true);
+        }
         break;
     }
-  }, [activeCwd, dismissWorkspaceLayer, handleNewSession, newSessionCwd, openSessionStatsPanel, openWorkspaceLayer, selectedSession?.cwd, usesOverlayLayout]);
+  }, [activeCwd, dismissWorkspaceLayer, handleNewSession, newSessionCwd, openSessionStatsPanel, openWorkspaceLayer, rightPanelOpen, selectedSession?.cwd, usesOverlayLayout]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -690,27 +728,6 @@ export function AppShell() {
       ? `cwd:${gitChangesCwd}`
       : null;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: explorerRefreshKey intentionally refreshes the Git summary.
-  useEffect(() => {
-    let cancelled = false;
-    if (!gitChangesCwd) {
-      setGitChangesCount(null);
-      return;
-    }
-    fetch(`/api/git/changes?cwd=${encodeURIComponent(gitChangesCwd)}`, { cache: "no-store" })
-      .then(async (res) => {
-        const data = await res.json() as { isGit?: boolean; totals?: { files: number }; error?: string };
-        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-        return data;
-      })
-      .then((data) => {
-        if (!cancelled) setGitChangesCount(data.isGit ? data.totals?.files ?? 0 : null);
-      })
-      .catch(() => {
-        if (!cancelled) setGitChangesCount(null);
-      });
-    return () => { cancelled = true; };
-  }, [gitChangesCwd, explorerRefreshKey]);
 
   const hasWorkspace = Boolean(gitChangesCwd);
   const compactNumber = (value: number) => value >= 1_000_000
@@ -754,9 +771,30 @@ export function AppShell() {
       : activeCwd
         ? "Choose a session"
         : "Choose a project";
+  const panelMaxWidths = getDesktopPanelMaxWidths(
+    getViewportWidth(),
+    panelWidths,
+    sidebarOpen,
+    rightPanelOpen,
+  );
+  const resizablePanelMaxWidths = usesOverlayLayout
+    ? {
+        sidebar: Math.max(SIDEBAR_MIN_WIDTH, Math.min(panelMaxWidths.sidebar, getViewportWidth() - 48)),
+        right: Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(panelMaxWidths.right, getViewportWidth() - 48)),
+      }
+    : panelMaxWidths;
 
+  const openMoreActions = () => {
+    setActiveTopPanel(null);
+    if (usesOverlayLayout) openWorkspaceLayer("more");
+    else setMobileMoreOpen(true);
+  };
+  const dismissMoreActions = () => {
+    if (usesOverlayLayout) dismissWorkspaceLayer();
+    else setMobileMoreOpen(false);
+  };
   const runMoreAction = (action: () => void) => {
-    dismissWorkspaceLayer();
+    dismissMoreActions();
     action();
   };
   const mobileMoreActions: MobileMoreActions = {
@@ -817,7 +855,10 @@ export function AppShell() {
 
   return (
     <>
-      <div className={styles.shell}>
+      <div
+        className={styles.shell}
+        style={{ "--shell-desktop-center-min-width": `${DESKTOP_CENTER_MIN_WIDTH}px` } as CSSProperties}
+      >
         <div className={styles.safeAreaFill} aria-hidden="true" />
         <button
           type="button"
@@ -840,8 +881,9 @@ export function AppShell() {
           inert={!sidebarOpen}
         >
           {sidebarContent}
-          {sidebarOpen && !usesOverlayLayout && (
-            <hr
+          {sidebarOpen && !isPhoneLayout && (
+            <div
+              role="separator"
               className={`${styles.resizeHandle} ${styles.sidebarResizeHandle}`}
               data-active={resizingPanel === "sidebar" || undefined}
               onPointerDown={startSidebarResize}
@@ -849,26 +891,29 @@ export function AppShell() {
                 if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
                   event.preventDefault();
                   const delta = event.key === "ArrowRight" ? 16 : -16;
-                  setSidebarWidth((width) => clampWidth(width + delta, SIDEBAR_MIN_WIDTH, getSidebarMaxWidth()));
+                  setPanelWidths((current) => {
+                    const max = getDesktopPanelMaxWidths(window.innerWidth, current, true, rightPanelOpen).sidebar;
+                    return { ...current, sidebar: clampWidth(current.sidebar + delta, SIDEBAR_MIN_WIDTH, max) };
+                  });
                 }
               }}
               tabIndex={0}
               aria-orientation="vertical"
               aria-valuemin={SIDEBAR_MIN_WIDTH}
-              aria-valuemax={getSidebarMaxWidth()}
+              aria-valuemax={resizablePanelMaxWidths.sidebar}
               aria-valuenow={sidebarWidth}
               aria-label="Resize sidebar"
-              title="Resize sidebar"
             />
           )}
         </aside>
 
         <main
+          ref={centerPanelRef}
           className={styles.center}
           aria-hidden={usesOverlayLayout && (sidebarOpen || rightPanelOpen) || undefined}
           inert={usesOverlayLayout && (sidebarOpen || rightPanelOpen)}
         >
-          <header ref={topBarRef} className={styles.topBar}>
+          <header ref={topBarRef} className={styles.topBar} data-chrome={chromeDensity}>
             <div className={styles.desktopChrome}>
               <IconButton label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} selected={sidebarOpen} className={styles.topIcon} onClick={handleSidebarToggle}>
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" /></svg>
@@ -925,7 +970,7 @@ export function AppShell() {
             </div>
 
             <div className={styles.compactChrome}>
-              <button type="button" className={styles.compactNavButton} aria-pressed={sidebarOpen} onClick={handleSidebarToggle}>
+              <button type="button" className={`${styles.compactNavButton} ${styles.mobileSessionsButton}`} aria-pressed={sidebarOpen} onClick={handleSidebarToggle}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" /></svg>
                 <span>Sessions</span>
               </button>
@@ -933,33 +978,34 @@ export function AppShell() {
                 <span className={styles.currentSessionTitle}>{currentSessionTitle}</span>
                 <span className={styles.currentSessionMeta}>{currentSessionMeta}</span>
               </button>
-              <button type="button" className={styles.compactNavButton} aria-pressed={rightPanelOpen} onClick={toggleInspector}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
-                <span>Inspector</span>
-              </button>
-              <button type="button" className={styles.compactNavButton} aria-pressed={mobileMoreOpen} onClick={() => { setActiveTopPanel(null); openWorkspaceLayer("more"); }}>
+              <button ref={compactMoreButtonRef} type="button" className={`${styles.compactNavButton} ${styles.mobileMoreButton}`} aria-pressed={mobileMoreOpen} onClick={openMoreActions}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
                 <span>More</span>
               </button>
-              <div className={styles.branchHost} aria-hidden="true">
-                <BranchNavigator
-                  tree={branchTree}
-                  activeLeafId={branchActiveLeafId}
-                  onLeafChange={handleBranchLeafChange}
-                  inline
-                  compact
-                  containerRef={topBarRef}
-                  open={activeTopPanel === "branches"}
-                  onToggle={() => toggleTopPanel("branches")}
-                  hasSession
-                />
-              </div>
+              <button type="button" className={`${styles.compactNavButton} ${styles.mobileInspectorButton}`} aria-pressed={rightPanelOpen} onClick={toggleInspector}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+                <span>Inspector</span>
+              </button>
             </div>
           </header>
+
+          <BranchNavigator
+            tree={branchTree}
+            activeLeafId={branchActiveLeafId}
+            onLeafChange={handleBranchLeafChange}
+            inline
+            popupOnly
+            restoreFocusRef={compactMoreButtonRef}
+            containerRef={topBarRef}
+            open={chromeDensity === "compact" && activeTopPanel === "branches"}
+            onToggle={() => toggleTopPanel("branches")}
+            hasSession
+          />
 
           {activeTopPanel && activeTopPanel !== "branches" && topPanelPos && (
             <div
               className={styles.topPanelHost}
+              data-chrome={chromeDensity}
               style={{
                 "--panel-top": `${topPanelPos.top}px`,
                 top: topPanelPos.top,
@@ -1020,7 +1066,13 @@ export function AppShell() {
                     <ol className={styles.placeholderSteps}><li>Open Sessions and choose a project directory.</li><li>Configure a model, then start the first message.</li></ol>
                   )}
                   <div className={styles.placeholderActions}>
-                    <Button variant="primary" size={usesOverlayLayout ? "touch" : "default"} onClick={() => usesOverlayLayout ? openWorkspaceLayer("sessions") : setSidebarOpen(true)}>Open Sessions</Button>
+                    <Button variant="primary" size={usesOverlayLayout ? "touch" : "default"} onClick={() => {
+                      if (usesOverlayLayout) openWorkspaceLayer("sessions");
+                      else {
+                        setPanelWidths((current) => fitDesktopPanelWidths(window.innerWidth, current, true, rightPanelOpen));
+                        setSidebarOpen(true);
+                      }
+                    }}>Open Sessions</Button>
                     {activeCwd && <Button size={usesOverlayLayout ? "touch" : "default"} onClick={() => handleNewSession("", activeCwd)}>New session</Button>}
                   </div>
                 </section>
@@ -1039,28 +1091,31 @@ export function AppShell() {
           aria-hidden={!rightPanelOpen}
           inert={!rightPanelOpen}
         >
+          {rightPanelOpen && !isPhoneLayout && (
+            <div
+              role="separator"
+              className={`${styles.resizeHandle} ${styles.inspectorResizeHandle}`}
+              data-active={resizingPanel === "right" || undefined}
+              onPointerDown={startRightPanelResize}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault();
+                  const delta = event.key === "ArrowLeft" ? 16 : -16;
+                  setPanelWidths((current) => {
+                    const max = getDesktopPanelMaxWidths(window.innerWidth, current, sidebarOpen, true).right;
+                    return { ...current, right: clampWidth(current.right + delta, RIGHT_PANEL_MIN_WIDTH, max) };
+                  });
+                }
+              }}
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-valuemin={RIGHT_PANEL_MIN_WIDTH}
+              aria-valuemax={resizablePanelMaxWidths.right}
+              aria-valuenow={rightPanelWidth}
+              aria-label="Resize inspector"
+            />
+          )}
           <div className={styles.inspectorInner}>
-            {rightPanelOpen && !usesOverlayLayout && (
-              <hr
-                className={`${styles.resizeHandle} ${styles.inspectorResizeHandle}`}
-                data-active={resizingPanel === "right" || undefined}
-                onPointerDown={startRightPanelResize}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                    event.preventDefault();
-                    const delta = event.key === "ArrowLeft" ? 16 : -16;
-                    setRightPanelWidth((width) => clampWidth(width + delta, RIGHT_PANEL_MIN_WIDTH, getRightPanelMaxWidth()));
-                  }
-                }}
-                tabIndex={0}
-                aria-orientation="vertical"
-                aria-valuemin={RIGHT_PANEL_MIN_WIDTH}
-                aria-valuemax={getRightPanelMaxWidth()}
-                aria-valuenow={rightPanelWidth}
-                aria-label="Resize inspector"
-                title="Resize inspector"
-              />
-            )}
             <header className={styles.inspectorHeader}>
               <div className={styles.inspectorIdentity}>
                 <IconButton label="Back to conversation" size="touch" className={styles.inspectorBack} onClick={hideInspector}>
@@ -1069,7 +1124,7 @@ export function AppShell() {
                 <h2>Inspector</h2>
               </div>
               <div className={styles.inspectorTabs}>
-                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes{gitChangesCount !== null && gitChangesCount > 0 && <span className={styles.inspectorCount}>{gitChangesCount}</span>}</button>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes</button>
                 <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "terminal"} onClick={handleOpenTerminal}>Terminal</button>
                 <div className={styles.desktopFileTabs}>
                   <TabBar
@@ -1081,14 +1136,14 @@ export function AppShell() {
                 </div>
               </div>
               <nav className={styles.mobileInspectorTabs} aria-label="Inspector views">
-                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes{gitChangesCount !== null && gitChangesCount > 0 && <span className={styles.inspectorCount}>{gitChangesCount}</span>}</button>
+                <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "changes"} onClick={handleOpenChanges}>Changes</button>
                 <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "file"} onClick={handleOpenPreview}>Preview{fileTabs.length > 0 && <span className={styles.inspectorCount}>{fileTabs.length}</span>}</button>
                 <button type="button" className={styles.inspectorTab} aria-pressed={rightPanelView === "terminal"} onClick={handleOpenTerminal}>Terminal</button>
               </nav>
             </header>
             <div className={styles.inspectorBody}>
               {rightPanelView === "changes" ? (
-                <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} onCountChange={setGitChangesCount} />
+                <GitChangesPanel cwd={gitChangesCwd} refreshKey={explorerRefreshKey} />
               ) : rightPanelView === "terminal" ? (
                 <TerminalPanel cwd={gitChangesCwd} scopeId={terminalScopeId} />
               ) : activeFileTab?.filePath ? (
@@ -1118,7 +1173,7 @@ export function AppShell() {
 
       <MobileMoreSheet
         open={mobileMoreOpen}
-        onOpenChange={(open) => { if (!open) closeWorkspaceLayer(); }}
+        onOpenChange={(open) => { if (!open) dismissMoreActions(); }}
         actions={mobileMoreActions}
         hasWorkspace={hasWorkspace}
         hasSession={Boolean(selectedSession)}

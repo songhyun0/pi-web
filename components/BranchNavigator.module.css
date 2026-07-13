@@ -1,24 +1,27 @@
 .roleBadge { min-width: 18px; padding-inline: 4px; flex: 0 0 auto; color: var(--text-dim); background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 9px; line-height: 16px; text-align: center; }
 .roleBadge[data-role="user"] { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); }
 .treeRow { min-height: 28px; display: flex; align-items: center; gap: var(--space-half); color: var(--text-dim); border-radius: var(--radius-md); }
-.treeRow:hover { background: var(--bg-hover); }
+@media (hover: hover) and (pointer: fine) {
+  .treeRow:hover:not([data-active="true"]) { background: var(--bg-hover); }
+}
 .treeRow[data-path="true"] { color: var(--text-muted); }
 .treeRow[data-active="true"] { color: var(--text); background: var(--bg-selected); }
 .connector { width: var(--tree-depth-width); flex: 0 0 auto; overflow: hidden; color: inherit; font-family: var(--font-mono); font-size: 10px; white-space: pre; }
 .foldButton { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; font: inherit; }
-.foldButton:hover:not(:disabled) { color: var(--text); background: var(--bg-selected); }
+@media (hover: hover) and (pointer: fine) {
+  .foldButton:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+}
 .foldButton:disabled { color: transparent; cursor: default; }
 .rowSelect { min-width: 0; min-height: 28px; padding: 0 var(--space-half) 0 0; flex: 1; display: flex; align-items: center; gap: var(--space-half); overflow: hidden; color: inherit; background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; font: inherit; text-align: left; }
 .foldButton:focus-visible,
 .rowSelect:focus-visible,
 .inlineTrigger:focus-visible,
-.blockTrigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.blockTrigger:focus-visible { outline: 0; background: var(--bg-hover); }
+.treeRow[data-active="true"] .rowSelect:focus-visible { background: transparent; }
 .nodeDot { width: 7px; height: 7px; flex: 0 0 auto; background: var(--border); border: 1px solid var(--text-dim); border-radius: var(--radius-full); }
 .treeRow[data-path="true"] .nodeDot { background: var(--text-muted); }
-.treeRow[data-active="true"] .nodeDot { background: var(--accent); border-color: var(--accent); }
 .skipped { flex: 0 0 auto; color: var(--text-dim); font-size: 10px; }
 .rowTitle { min-width: 0; flex: 1; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.treeRow[data-active="true"] .rowTitle { font-weight: 650; }
 .label { color: var(--accent); }
 .separator { color: var(--text-dim); }
 .childCount { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 9px; }
@@ -33,30 +36,37 @@
 .search { min-width: 0; padding: 0 var(--space-1); }
 .filterSelect { padding: 0 var(--space-1); }
 .search:focus,
-.filterSelect:focus { border-color: color-mix(in srgb, var(--accent) 56%, var(--border)); outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent); outline-offset: 0; }
+.filterSelect:focus { border-color: var(--border); outline: 0; background: var(--bg-hover); }
 .reason,
 .empty { color: var(--text-dim); font-size: 11px; font-style: italic; }
 .empty { padding: var(--space-1) var(--space-half); color: var(--text-muted); font-size: 12px; }
 .rows { margin: 0; padding: 0; display: grid; gap: 1px; list-style: none; }
 .inlineRoot { height: 100%; display: flex; align-items: stretch; }
-.inlineTrigger { height: 100%; padding: 0 var(--space-1-5); display: flex; align-items: center; gap: var(--space-half); color: var(--text-muted); background: transparent; border: 0; border-top: 2px solid transparent; border-right: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap; transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap); }
-.inlineTrigger:hover { color: var(--text); background: var(--bg-hover); }
-.inlineTrigger[data-open="true"] { color: var(--text); background: var(--bg-selected); border-top-color: var(--accent); }
-.floatingPanel { position: fixed; z-index: var(--z-popover); max-width: 100vw; background: var(--bg-panel); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-popover); }
+.inlineTrigger { height: 100%; padding: 0 var(--space-1-5); display: flex; align-items: center; gap: var(--space-half); color: var(--text-muted); background: transparent; border: 0; border-right: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap; transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap); }
+@media (hover: hover) and (pointer: fine) {
+  .inlineTrigger:hover:not([data-open="true"]) { color: var(--text); background: var(--bg-hover); }
+}
+.inlineTrigger[data-open="true"] { color: var(--text); background: var(--bg-selected); }
+.floatingPanel { position: fixed; z-index: var(--z-popover); max-width: 100vw; background: var(--bg-panel); border: 0; box-shadow: var(--shadow-popover); }
 .blockRoot { position: relative; flex: 0 0 auto; background: var(--bg); border-bottom: 1px solid var(--border); }
 .blockTrigger { width: 100%; min-height: 34px; padding: var(--space-half) var(--space-1-5); display: flex; align-items: center; gap: var(--space-half); color: var(--text-muted); background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 11px; text-align: left; }
-.blockTrigger:hover { color: var(--text); background: var(--bg-hover); }
-.blockPanel { position: absolute; inset: 100% 0 auto; z-index: var(--z-popover); background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-popover); }
+@media (hover: hover) and (pointer: fine) {
+  .blockTrigger:hover { color: var(--text); background: var(--bg-hover); }
+}
+.blockPanel { position: absolute; inset: 100% 0 auto; z-index: var(--z-popover); background: var(--bg); border: 0; box-shadow: var(--shadow-popover); }
 .noContent { padding: var(--space-1) var(--space-2); color: var(--text-muted); font-size: 12px; font-style: italic; }
 
 @media (max-width: 1024px), (pointer: coarse) {
   .inlineTrigger,
   .blockTrigger,
   .treeRow,
-  .rowSelect { min-height: 44px; }
-  .foldButton { width: 44px; height: 44px; }
+  .rowSelect { min-height: var(--control-touch); }
+  .foldButton { width: var(--control-touch); height: var(--control-touch); }
   .search,
-  .filterSelect { min-height: 44px; font-size: 12px; }
+  .filterSelect { min-height: var(--control-touch); }
+}
+
+@media (max-width: 1024px) {
   .panel { max-height: calc(100dvh - var(--panel-top, 52px)); padding: var(--space-1); }
 }
 

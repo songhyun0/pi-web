@@ -1,16 +1,20 @@
-.root { height: 100%; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.root { height: 100%; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; background: var(--bg-raised); scrollbar-width: none; }
 .root::-webkit-scrollbar { display: none; }
-.tab { min-width: 0; max-width: 200px; height: 100%; display: flex; align-items: stretch; flex: 0 1 180px; color: var(--text-muted); background: var(--bg-panel); border-right: 1px solid var(--border); border-bottom: 2px solid transparent; transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap); }
-.tab:hover { color: var(--text); background: var(--bg-hover); }
-.tab[data-active="true"] { color: var(--text); background: var(--bg); border-bottom-color: var(--accent); }
+.tab { min-width: 0; max-width: 200px; height: 100%; display: flex; align-items: stretch; flex: 0 1 180px; color: var(--text-muted); background: transparent; border-right: 1px solid var(--border); border-bottom: 0; transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap); }
+@media (hover: hover) and (pointer: fine) {
+  .tab:hover:not([data-active="true"]) { color: var(--text); background: var(--bg-hover); }
+}
+.tab[data-active="true"] { color: var(--text); background: var(--bg-selected); }
 .select { min-width: 0; padding: 0 0 0 var(--space-1); display: flex; align-items: center; gap: var(--space-half); flex: 1 1 auto; color: inherit; background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 11px; text-align: left; }
 .select:focus-visible,
-.close:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.close:focus-visible { outline: 0; background: var(--bg-hover); }
+.tab[data-active="true"] .select:focus-visible { background: var(--bg-selected); }
 .icon { display: inline-flex; align-items: center; flex: 0 0 auto; opacity: .72; }
-.tab[data-active="true"] .icon { opacity: 1; }
 .label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .close { width: 32px; min-width: 32px; height: 100%; padding: 0; display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; }
-.close:hover { color: var(--error); background: var(--error-soft); }
+@media (hover: hover) and (pointer: fine) {
+  .close:hover { color: var(--error); background: var(--error-soft); }
+}
 
 @media (prefers-reduced-motion: reduce) {
 .tab { transition: none; }
