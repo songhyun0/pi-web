@@ -32,6 +32,7 @@
     "terminal": "node terminal-server.mjs -p 30142",
     "deploy:local": "npm run build && (launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/com.agegr.pi-web.plist 2>/dev/null || true) && (launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/com.agegr.pi-web-terminal.plist 2>/dev/null || true) && launchctl kickstart -k gui/$(id -u)/com.agegr.pi-web && launchctl kickstart -k gui/$(id -u)/com.agegr.pi-web-terminal",
     "lint": "eslint .",
+    "test:dialog-interaction": "NODE_ENV=test node --import tsx --test --test-concurrency=1 lib/dialog-interaction.test.tsx lib/directory-picker-interaction.test.tsx lib/extension-ui-interaction.test.tsx lib/fork-composer-focus.test.tsx",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
@@ -58,14 +59,17 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
+    "jsdom": "^29.1.1",
     "postcss": "^8",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.23.0",
     "typescript": "^5"
   }
 }
