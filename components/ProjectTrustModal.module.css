@@ -8,7 +8,7 @@
 
 .workspace {
   width: 100%;
-  min-height: 560px;
+  min-height: 0;
   height: min(730px, calc(100dvh - 190px));
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -51,24 +51,15 @@
 }
 
 .statusCard {
-  padding: var(--space-2);
+  padding: 0 0 var(--space-3);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
   color: var(--text);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-}
-
-.statusCard[data-tone="success"] {
-  background: color-mix(in srgb, var(--success) 7%, var(--bg-raised));
-  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
-}
-
-.statusCard[data-tone="warning"] {
-  background: color-mix(in srgb, var(--warning) 8%, var(--bg-raised));
-  border-color: color-mix(in srgb, var(--warning) 38%, var(--border));
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .statusCard[data-tone="danger"] {
@@ -133,19 +124,19 @@
   margin: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  gap: var(--space-2);
+  overflow: visible;
+  background: transparent;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .statusFacts > div {
   min-width: 0;
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
-  gap: 3px;
-  background: var(--bg-panel);
+  gap: var(--space-half);
+  background: transparent;
 }
 
 .statusFacts dt,
@@ -199,17 +190,22 @@
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   align-items: start;
-  gap: var(--space-2);
+  gap: var(--space-4);
+}
+
+.mainGrid[data-single="true"] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .panel {
   min-width: 0;
-  padding: var(--space-2);
+  padding: 0 0 var(--space-3);
   display: grid;
   gap: var(--space-2);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .panelHeader {
@@ -241,12 +237,13 @@
 
 .resourceRow {
   min-width: 0;
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
   gap: var(--space-half);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .resourceHeading {
@@ -291,8 +288,8 @@
 
 .resourceDetails summary:focus-visible,
 .actionCard:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: 0;
+  background: var(--bg-hover);
 }
 
 .resourceDetails > div {
@@ -311,13 +308,14 @@
 
 .currentDecision {
   min-width: 0;
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px var(--space-1);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  gap: var(--space-half) var(--space-1);
+  background: transparent;
+  border: 0;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .currentDecision strong {
@@ -337,41 +335,34 @@
   position: relative;
   width: 100%;
   min-width: 0;
-  min-height: 88px;
-  padding: var(--space-1-5);
+  min-height: 80px;
+  padding: var(--space-2) var(--space-1-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-half);
   overflow: hidden;
   color: var(--text-muted);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   cursor: pointer;
   text-align: left;
-  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap);
+  transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
 }
 
-.actionCard::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  content: "";
-  background: var(--border-strong);
-}
 
-.actionCard[data-tone="success"]::before { background: var(--success); }
-.actionCard[data-tone="danger"]::before { background: var(--error); }
-
-.actionCard:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+@media (hover: hover) and (pointer: fine) {
+  .actionCard:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .actionCard:disabled {
+  color: var(--text-disabled);
   cursor: not-allowed;
-  opacity: var(--state-disabled-opacity);
+  opacity: 1;
 }
 
 .actionCardTop {
@@ -414,14 +405,15 @@
 
 .updateList > div {
   min-width: 0;
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--space-1);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .updateList code {
@@ -464,57 +456,33 @@
 
 @media (max-width: 640px) {
   .dialogBody {
-    flex: 1;
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
-  .workspace {
-    min-height: 0;
-    height: 100%;
-  }
+  .workspace { min-height: 0; height: 100%; }
 
   .content,
   .loadingState,
-  .loadFailure {
-    padding: var(--space-1-5);
-  }
+  .loadFailure { padding: var(--space-3) var(--space-2) var(--space-4); }
 
   .statusCard {
     grid-template-columns: minmax(0, 1fr);
-    padding: var(--space-1-5);
+    padding: 0 0 var(--space-3);
   }
+  .statusBadges { justify-content: flex-start; }
+  .statusFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .statusLead > svg { width: 32px; height: 32px; }
+  .statusLead h2 { font-size: 21px; }
 
-  .statusBadges {
-    justify-content: flex-start;
-  }
-
-  .statusFacts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .statusLead > svg {
-    width: 32px;
-    height: 32px;
-  }
-
-  .statusLead h2 {
-    font-size: 21px;
-  }
-
-  .panel {
-    padding: var(--space-1-5);
-  }
-
-  .panelHeader {
-    align-items: center;
-  }
-
-  .actionCard {
-    min-height: var(--control-touch);
-  }
-
-  .footerStatus {
-    display: none;
-  }
+  .mainGrid { gap: var(--space-4); }
+  .panel { padding: 0 0 var(--space-3); }
+  .panelHeader { align-items: center; }
+  .actionCard { min-height: var(--control-touch); }
+  .footerStatus { display: none; }
 }
 
 @media (pointer: coarse) {

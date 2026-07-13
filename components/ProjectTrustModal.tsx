@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Dialog, EmptyState, Notice, Skeleton } from "@/components/ui";
 import type {
   ProjectTrustAction,
@@ -31,7 +31,6 @@ async function readTrustResponse(response: Response): Promise<ProjectTrustStatus
 }
 
 export function ProjectTrustModal({ cwd, onClose, onChanged }: Props) {
-  const closeRef = useRef<HTMLButtonElement>(null);
   const [status, setStatus] = useState<ProjectTrustStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingAction, setSavingAction] = useState<ProjectTrustAction | null>(null);
@@ -102,13 +101,11 @@ export function ProjectTrustModal({ cwd, onClose, onChanged }: Props) {
         variant="adaptive"
         size="xl"
         bodyClassName={styles.dialogBody}
-        initialFocusRef={closeRef}
         dismissible={!busy && !actionIntent}
         footer={
           <div className={styles.footer}>
             <span className={styles.footerStatus} aria-live="polite">{footerStatus}</span>
             <Button loading={loading} disabled={busy || loading} onClick={() => void load()}>Refresh</Button>
-            <Button ref={closeRef} variant="primary" disabled={busy} onClick={onClose}>Close</Button>
           </div>
         }
       >
@@ -160,21 +157,21 @@ export function ProjectTrustModal({ cwd, onClose, onChanged }: Props) {
               {error && <Notice tone="danger" title="Trust action failed">{error}</Notice>}
 
               <Notice tone={status.requiresTrust ? "warning" : "neutral"} title={status.requiresTrust ? "Review local code before trusting" : "No trust-requiring resources detected"}>
-                Project-local <code>.pi/extensions</code> and pi packages can execute local code. Only trust repositories you understand. Trusting enables project-local settings, extensions, skills, prompts, themes, and packages.
+                {status.requiresTrust
+                  ? <>Project-local <code>.pi/extensions</code> and pi packages can execute local code. Only trust repositories you understand.</>
+                  : "No project-local extensions or packages need review for this folder."}
               </Notice>
 
-              <div className={styles.mainGrid}>
-                <section className={styles.panel}>
-                  <div className={styles.panelHeader}>
-                    <div>
-                      <h3>Detected project resources</h3>
-                      <p>Server inventory of local configuration and executable resources.</p>
+              <div className={styles.mainGrid} data-single={resources.length === 0 || undefined}>
+                {resources.length > 0 && (
+                  <section className={styles.panel}>
+                    <div className={styles.panelHeader}>
+                      <div>
+                        <h3>Detected project resources</h3>
+                        <p>Server inventory of local configuration and executable resources.</p>
+                      </div>
+                      <Badge tone="warning">{resources.length}</Badge>
                     </div>
-                    <Badge tone={resources.length ? "warning" : "neutral"}>{resources.length}</Badge>
-                  </div>
-                  {resources.length === 0 ? (
-                    <EmptyState title="No local resources detected" description="This project currently has no resources that require an explicit trust decision." />
-                  ) : (
                     <div className={styles.resourceList}>
                       {resources.map((entry) => (
                         <article className={styles.resourceRow} key={`${entry.kind}:${entry.path}`}>
@@ -194,8 +191,8 @@ export function ProjectTrustModal({ cwd, onClose, onChanged }: Props) {
                         </article>
                       ))}
                     </div>
-                  )}
-                </section>
+                  </section>
+                )}
 
                 <aside className={styles.panel}>
                   <div className={styles.panelHeader}>

@@ -391,7 +391,6 @@ export function SkillsConfig({ cwd, onClose }: { cwd: string; onClose: () => voi
       >
         Refresh
       </Button>
-      <Button variant="secondary" disabled={busy} onClick={requestClose}>Close</Button>
     </div>
   );
 

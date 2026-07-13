@@ -8,7 +8,7 @@
 
 .workspace {
   width: 100%;
-  min-height: 520px;
+  min-height: 0;
   height: min(720px, calc(100dvh - 190px));
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
@@ -95,20 +95,23 @@
   transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
 }
 
-.navRow:hover,
-.modelRow:hover,
-.addModelButton:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) and (pointer: fine) {
+  .navRow:hover:not(.navRowSelected),
+  .modelRow:hover:not(.navRowSelected),
+  .addModelButton:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .navRow:focus-visible,
 .modelRow:focus-visible,
 .addModelButton:focus-visible,
 .providerCard:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline: 0;
+  background: var(--bg-hover);
 }
+.navRowSelected:focus-visible { background: var(--bg-selected); }
 
 .navRowSelected {
   color: var(--text);
@@ -262,12 +265,13 @@
 }
 
 .formSection {
-  padding: var(--space-2);
+  padding: 0 0 var(--space-3);
   display: grid;
   gap: var(--space-2);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .formSectionHeader {
@@ -280,15 +284,15 @@
 .formSectionTitle {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
 .formSectionDescription {
   margin: var(--space-half) 0 0;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .formSectionAction {
@@ -324,13 +328,14 @@
 }
 
 .levelRow {
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
   grid-template-columns: 64px minmax(280px, 1fr) minmax(110px, 0.42fr);
   align-items: center;
-  gap: var(--space-1);
-  background: var(--bg-panel);
-  border-radius: var(--radius-md);
+  gap: var(--space-2);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .levelName {
@@ -516,9 +521,11 @@
   transition: background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap);
 }
 
-.providerCard:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+@media (hover: hover) and (pointer: fine) {
+  .providerCard:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
 }
 
 .providerCardCopy {
@@ -549,9 +556,11 @@
   transition: color var(--motion-fast) var(--ease-snap), transform var(--motion-fast) var(--ease-snap);
 }
 
-.providerCard:hover .providerCardArrow {
-  color: var(--accent);
-  transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+  .providerCard:hover .providerCardArrow {
+    color: var(--accent);
+    transform: translateX(2px);
+  }
 }
 
 .customProviderMark {
@@ -646,24 +655,43 @@
 
 @media (max-width: 640px) {
   .dialogBody {
-    flex: 1;
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
   .workspace {
     min-height: 0;
     height: 100%;
     display: block;
+    overflow: hidden;
   }
 
   .navigation {
     width: 100%;
     height: 100%;
+    background: var(--bg);
     border-right: 0;
   }
+  .navigationHeader { min-height: var(--utility-row-height); padding: var(--space-1) var(--content-gutter); }
+  .navigationDescription { display: none; }
+  .inventoryScroll { padding: 0; }
+  .navSectionHeading { min-height: var(--utility-row-height); padding-inline: var(--content-gutter); font-size: 13px; letter-spacing: 0; text-transform: none; }
+  .navigation .navRow,
+  .navigation .modelRow,
+  .navigation .addModelButton { min-height: var(--list-row-height); border-bottom: 1px solid var(--border); border-radius: 0; }
+  .modelRow,
+  .addModelButton { border-radius: 0; }
+  .navRow { padding-inline: var(--content-gutter); }
+  .modelRow,
+  .addModelButton { padding-right: var(--content-gutter); padding-left: var(--space-6); }
+  .navLabel { font-size: 14px; }
+  .navMeta { font-size: 11px; }
+  .navigationFooter { padding: var(--space-1) var(--space-2); }
 
-  .workspace[data-detail="true"] .navigation {
-    display: none;
-  }
+  .workspace[data-detail="true"] .navigation { display: none; }
 
   .detailPanel {
     display: none;
@@ -671,9 +699,7 @@
     height: 100%;
   }
 
-  .workspace[data-detail="true"] .detailPanel {
-    display: flex;
-  }
+  .workspace[data-detail="true"] .detailPanel { display: flex; }
 
   .mobileDetailHeader {
     min-height: var(--control-touch);
@@ -685,77 +711,39 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .detailScroll {
-    padding: var(--space-1-5);
-  }
+  .detailScroll { padding: var(--space-3) var(--space-2); }
 
   .editorHeading,
-  .formSectionHeader {
-    flex-direction: column;
-  }
+  .formSectionHeader { flex-direction: column; }
 
   .headingActions,
-  .formSectionAction {
-    width: 100%;
-  }
+  .formSectionAction { width: 100%; }
 
   .headingActions > button,
-  .formSectionAction > button {
-    flex: 1 1 0;
-  }
+  .formSectionAction > button { flex: 1 1 0; }
 
-  .formSection {
-    padding: var(--space-1-5);
-  }
+  .formSection { padding: 0 0 var(--space-3); }
 
   .formGridTwo,
   .switchGrid,
   .costGrid,
-  .providerCardGrid {
-    grid-template-columns: 1fr;
-  }
+  .providerCardGrid { grid-template-columns: 1fr; }
 
-  .levelRow {
-    grid-template-columns: 1fr;
-  }
+  .levelRow { grid-template-columns: 1fr; }
+  .levelName { font-size: 12px; font-weight: 700; }
 
-  .levelName {
-    font-size: 12px;
-    font-weight: 700;
-  }
+  .inputActionRow { align-items: stretch; flex-direction: column; }
+  .inputActionRow > button { width: 100%; }
+  .inlineActions > button { flex: 1 1 0; }
 
-
-  .inputActionRow {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .inputActionRow > button {
-    width: 100%;
-  }
-
-  .inlineActions > button {
-    flex: 1 1 0;
-  }
-
-  .pickerGroups {
-    padding: var(--space-1-5);
-  }
-
-  .providerCard {
-    min-height: var(--control-touch);
-  }
-
-  .footerStatusText {
-    display: none;
-  }
+  .pickerGroups { padding: var(--space-1-5); }
+  .providerCard { min-height: var(--control-touch); }
+  .footerStatusText { display: none; }
 }
 
 @media (pointer: coarse) {
   .navRow,
   .modelRow,
   .addModelButton,
-  .providerCard {
-    min-height: var(--control-touch);
-  }
+  .providerCard { min-height: var(--control-touch); }
 }

@@ -648,7 +648,6 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
           {saveError ?? validationError ?? saveMessage ?? (transientDirty ? "Authentication entry is not saved" : configDirty ? "models.json has unsaved changes" : "models.json is up to date")}
         </span>
       </div>
-      <Button variant="secondary" disabled={saving} onClick={requestClose}>Close</Button>
       <Button
         variant="primary"
         loading={saving}

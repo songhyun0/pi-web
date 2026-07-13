@@ -532,7 +532,6 @@ export function ProfileManagerModal({ cwd, profilesState, onClose }: ProfileMana
           <div className={styles.footerContent}>
             <span className={styles.footerStatus} aria-live="polite">{status}</span>
             <Button loading={actionBusy === "refresh"} disabled={busy || profilesState.loading} onClick={() => void handleRefresh()}>Refresh</Button>
-            <Button variant="primary" disabled={busy} onClick={requestClose}>Close</Button>
           </div>
         }
       >

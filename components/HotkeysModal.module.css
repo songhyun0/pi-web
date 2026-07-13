@@ -8,7 +8,7 @@
 
 .workspace {
   width: 100%;
-  min-height: 560px;
+  min-height: 0;
   height: min(730px, calc(100dvh - 190px));
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -47,21 +47,21 @@
 .summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  gap: var(--space-2);
+  overflow: visible;
+  background: transparent;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .summary > div {
   min-width: 0;
   min-height: 84px;
-  padding: var(--space-1-5);
+  padding: var(--space-1-5) 0;
   display: grid;
   align-content: start;
-  gap: 3px;
-  background: var(--bg-raised);
+  gap: var(--space-half);
+  background: transparent;
 }
 
 .summary > div[data-warning="true"] {
@@ -95,13 +95,13 @@
 }
 
 .registrySource {
-  padding: var(--space-1-5);
+  padding: var(--space-1-5) 0;
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.2fr);
   gap: var(--space-2);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .registrySource > div {
@@ -171,32 +171,26 @@
 
 .shortcutList {
   display: grid;
-  gap: 1px;
-  overflow: hidden;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  gap: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .shortcutCard {
   position: relative;
   min-width: 0;
-  min-height: 92px;
-  padding: var(--space-1-5);
+  min-height: 88px;
+  padding: var(--space-2) 0;
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(220px, 0.9fr) auto;
   align-items: center;
   gap: var(--space-2);
-  background: var(--bg-raised);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
 }
 
-.shortcutCard[data-status="browser-conflict"]::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  content: "";
-  background: var(--warning);
-}
 
 .shortcutIdentity {
   min-width: 0;
@@ -362,7 +356,7 @@
 
   .content,
   .loadingState {
-    padding: var(--space-1-5);
+    padding: var(--space-2);
   }
 
   .summary,
@@ -381,7 +375,7 @@
 
   .shortcutCard {
     min-height: 0;
-    padding: var(--space-1-5);
+    padding: var(--space-2) 0;
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -403,11 +397,5 @@
 
   .footerStatus {
     display: none;
-  }
-}
-
-@media (pointer: coarse) {
-  .keyPart kbd {
-    min-height: 28px;
   }
 }

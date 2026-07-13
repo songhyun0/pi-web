@@ -480,7 +480,6 @@ export function PluginsConfig({
         </span>
       </div>
       <Button disabled={loading || Boolean(busyKey)} onClick={() => void loadPlugins()}>Refresh</Button>
-      <Button variant="secondary" disabled={Boolean(busyKey)} onClick={requestClose}>Close</Button>
     </div>
   );
 

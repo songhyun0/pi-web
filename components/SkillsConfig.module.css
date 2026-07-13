@@ -8,7 +8,7 @@
 
 .workspace {
   width: 100%;
-  min-height: 520px;
+  min-height: 0;
   height: min(720px, calc(100dvh - 190px));
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -97,17 +97,20 @@
   transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
 }
 
-.skillRow:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) and (pointer: fine) {
+  .skillRow:hover:not(.skillRowSelected) {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .skillRow:focus-visible,
 .resultCard a:focus-visible,
 .registryLink:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline: 0;
+  background: var(--bg-hover);
 }
+.skillRowSelected:focus-visible { background: var(--bg-selected); }
 
 .skillRowSelected {
   color: var(--text);
@@ -161,9 +164,7 @@
 }
 
 .addButtonSelected {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--bg-selected);
 }
 
 .detailPanel {
@@ -237,12 +238,13 @@
 }
 
 .formSection {
-  padding: var(--space-2);
+  padding: 0 0 var(--space-3);
   display: grid;
   gap: var(--space-2);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .formSectionHeader {
@@ -255,15 +257,15 @@
 .formSectionTitle {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
 .formSectionDescription {
   margin: var(--space-half) 0 0;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .formSectionBody {
@@ -278,7 +280,7 @@
   gap: var(--space-half);
   color: var(--text-muted);
   background: var(--bg-panel);
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-md);
   font-size: 10px;
   font-weight: 700;
@@ -303,19 +305,19 @@
   margin: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  gap: 0 var(--space-2);
+  overflow: visible;
+  background: transparent;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .metadataGrid > div {
   min-width: 0;
-  padding: var(--space-1);
+  padding: var(--space-1-5) 0;
   display: grid;
-  gap: 3px;
-  background: var(--bg-panel);
+  gap: var(--space-half);
+  background: transparent;
 }
 
 .metadataGrid dt {
@@ -365,13 +367,14 @@
 .resultCard {
   min-width: 0;
   min-height: 72px;
-  padding: var(--space-1-5);
+  padding: var(--space-2) 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .resultCopy {
@@ -426,9 +429,11 @@
   text-underline-offset: 3px;
 }
 
-.resultMeta a:hover,
-.registryLink:hover {
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  .resultMeta a:hover,
+  .registryLink:hover {
+    text-decoration: underline;
+  }
 }
 
 .footer {
@@ -472,20 +477,35 @@
 
 @media (max-width: 640px) {
   .dialogBody {
-    flex: 1;
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
   .workspace {
     min-height: 0;
     height: 100%;
     display: block;
+    overflow: hidden;
   }
 
   .navigation {
     width: 100%;
     height: 100%;
+    background: var(--bg);
     border-right: 0;
   }
+  .navigationHeader { min-height: var(--utility-row-height); padding: var(--space-1) var(--content-gutter); }
+  .navigationDescription { display: none; }
+  .inventoryScroll { padding: 0; }
+  .navSectionHeading { min-height: var(--utility-row-height); padding-inline: var(--content-gutter); font-size: 13px; letter-spacing: 0; text-transform: none; }
+  .navigation .skillRow { min-height: var(--list-row-height); padding-inline: var(--content-gutter); border-bottom: 1px solid var(--border); border-radius: 0; }
+  .skillName { font-size: 12px; }
+  .skillDescription,
+  .skillSource { font-size: 11px; }
+  .navigationFooter { padding: var(--space-1) var(--space-2); }
 
   .workspace[data-detail="true"] .navigation {
     display: none;
@@ -526,7 +546,7 @@
   }
 
   .detailScroll {
-    padding: var(--space-1-5);
+    padding: var(--space-2);
   }
 
   .editorHeading,
@@ -535,7 +555,7 @@
   }
 
   .formSection {
-    padding: var(--space-1-5);
+    padding: 0 0 var(--space-3);
   }
 
   .metadataGrid,
@@ -563,7 +583,5 @@
 
 @media (pointer: coarse) {
   .skillRow,
-  .resultCard {
-    min-height: var(--control-touch);
-  }
+  .resultCard { min-height: var(--control-touch); }
 }

@@ -2,7 +2,6 @@
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Badge,
   Button,
   Dialog,
   EmptyState,
@@ -117,11 +116,6 @@ function appliesText(applies: RuntimeSettingApplies): string {
   }
 }
 
-function appliesTone(applies: RuntimeSettingApplies): "neutral" | "accent" | "warning" {
-  if (applies === "next-request") return "accent";
-  if (applies === "reload") return "warning";
-  return "neutral";
-}
 
 function parseDraft(setting: RuntimeSettingValue, draft: string): unknown {
   if (setting.type === "boolean") return draft === "true";
@@ -187,7 +181,6 @@ function mergeRuntimeDrafts(
 
 function RuntimeSettingEditor({
   setting,
-  scope,
   value,
   disabled,
   saving,
@@ -198,7 +191,6 @@ function RuntimeSettingEditor({
   onReset,
 }: {
   setting: RuntimeSettingValue;
-  scope: RuntimeSettingsScope;
   value: string;
   disabled: boolean;
   saving: boolean;
@@ -223,7 +215,6 @@ function RuntimeSettingEditor({
               onSave(draft);
             }}
             label={checked ? "Enabled" : "Disabled"}
-            description={`${scope === "global" ? "Global default" : "Project override"} · ${saving ? "saving change…" : "saves immediately"}`}
           />
           <Button
             variant="ghost"
@@ -266,7 +257,7 @@ function RuntimeSettingEditor({
         <Button variant="ghost" size="compact" disabled={disabled || saving || !hasOverride} onClick={onReset}>
           Reset
         </Button>
-        <Button size="compact" loading={saving} disabled={disabled || !dirty} onClick={() => onSave()}>
+        <Button variant="primary" size="compact" loading={saving} disabled={disabled || !dirty} onClick={() => onSave()}>
           Apply
         </Button>
       </div>
@@ -506,25 +497,6 @@ export function SettingsModal({
     { value: "integrations", label: <TabLabel>Integrations</TabLabel>, disabled: savingApp && tab !== "integrations" },
   ];
 
-  const footer = (
-    <div className={styles.footer}>
-      <span className={styles.footerMessage}>
-        {hasUnsavedChanges ? "Unsaved changes" : tab === "runtime" ? selectedScopePath : "Settings are stored locally"}
-      </span>
-      {tab === "app" && (
-        <Button
-          variant="primary"
-          loading={savingApp}
-          disabled={Boolean(validationError) || !appChanged}
-          onClick={() => void handleSaveApp()}
-        >
-          Save app settings
-        </Button>
-      )}
-      <Button variant="secondary" disabled={savingApp} onClick={requestClose}>Close</Button>
-    </div>
-  );
-
   const integrationItems: Array<{ title: string; description: string; action?: () => void }> = [
     { title: "Models", description: "Configure providers, model metadata, and API formats.", action: onOpenModels },
     { title: "Scoped models", description: "Manage the model set available while cycling within a session.", action: onOpenScopedModels },
@@ -543,9 +515,9 @@ export function SettingsModal({
         size="lg"
         dismissible={!savingApp}
         bodyClassName={styles.body}
-        footer={footer}
       >
-        <div className={styles.stickyControls}>
+        <div className={styles.workspace}>
+          <div className={styles.stickyControls}>
           <div className={styles.navigation}>
             <SegmentedControl
               value={tab}
@@ -650,10 +622,9 @@ export function SettingsModal({
                                       <code className={styles.settingKey}>{setting.key}</code>
                                     </div>
                                     <div className={styles.cardBadges}>
-                                      <Badge tone={hasOverride ? "accent" : "neutral"}>
-                                        {hasOverride ? "Override" : scope === "project" ? "Inherited" : "Default"}
-                                      </Badge>
-                                      <Badge tone={appliesTone(setting.applies)}>{appliesText(setting.applies)}</Badge>
+                                      <span>{hasOverride ? "Override" : scope === "project" ? "Inherited" : "Default"}</span>
+                                      <span aria-hidden="true">·</span>
+                                      <span>{appliesText(setting.applies)}</span>
                                     </div>
                                   </div>
                                   <div className={styles.metaGrid}>
@@ -674,7 +645,6 @@ export function SettingsModal({
                                   </div>
                                   <RuntimeSettingEditor
                                     setting={setting}
-                                    scope={scope}
                                     value={value}
                                     disabled={disabled || Boolean(setting.projectBlocked && scope === "project")}
                                     saving={saving}
@@ -756,14 +726,24 @@ export function SettingsModal({
               <div className={styles.controlActions}>
                 <Button
                   variant="ghost"
-                  disabled={displayName === DEFAULT_APP_SETTINGS.displayName}
+                  size="compact"
+                  disabled={displayName === DEFAULT_APP_SETTINGS.displayName || savingApp}
                   onClick={() => {
                     setDisplayName(DEFAULT_APP_SETTINGS.displayName);
                     setAppError(null);
                     setAppMessage(null);
                   }}
                 >
-                  Reset to default
+                  Reset
+                </Button>
+                <Button
+                  variant="primary"
+                  size="compact"
+                  loading={savingApp}
+                  disabled={Boolean(validationError) || !appChanged}
+                  onClick={() => void handleSaveApp()}
+                >
+                  Apply
                 </Button>
               </div>
             </section>
@@ -799,6 +779,7 @@ export function SettingsModal({
               </div>
             </section>
           )}
+          </div>
         </div>
       </Dialog>
 

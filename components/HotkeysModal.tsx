@@ -140,7 +140,6 @@ export function HotkeysModal({ onClose }: { onClose: () => void }) {
         <div className={styles.footer}>
           <span className={styles.footerStatus} aria-live="polite">{footerStatus}</span>
           <Button loading={loading} disabled={loading} onClick={() => void load()}>Refresh</Button>
-          <Button variant="primary" onClick={onClose}>Close</Button>
         </div>
       }
     >

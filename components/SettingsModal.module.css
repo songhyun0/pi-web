@@ -1,20 +1,46 @@
 .body {
+  min-height: 0;
   padding: 0;
-  background: var(--bg);
+  overflow: hidden;
+  background: var(--bg-raised);
 }
-
+.workspace {
+  width: 100%;
+  min-height: 0;
+  height: min(700px, calc(100dvh - 192px));
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  overflow: hidden;
+}
 .stickyControls {
-  position: sticky;
-  top: 0;
+  position: relative;
+  top: auto;
   z-index: 4;
-  background: color-mix(in srgb, var(--bg-raised) 96%, transparent);
-  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
 }
-
 .navigation {
-  padding: var(--space-1-5) var(--space-2);
+  padding: 0;
 }
-
+.navigation :global(.pi-segmented) {
+  width: 100%;
+  display: grid;
+  gap: 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.navigation :global(.pi-segmented__option) {
+  min-height: var(--control-touch);
+  justify-content: flex-start;
+  padding-inline: var(--space-1-5);
+  border-radius: 0;
+}
 .tabLabel {
   display: inline-flex;
   align-items: center;
@@ -31,11 +57,13 @@
 }
 
 .scopeToolbar {
-  padding: 0 var(--space-2) var(--space-1-5);
+  margin-top: auto;
+  padding-top: var(--space-2);
   display: grid;
-  grid-template-columns: minmax(220px, 0.55fr) minmax(0, 1fr);
+  grid-template-columns: 1fr;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  border-top: 1px solid var(--border);
 }
 
 .scopePath {
@@ -49,32 +77,39 @@
 }
 
 .content {
-  padding: var(--space-2);
-  display: grid;
-  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-4);
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .summary {
-  padding: var(--space-1-5);
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-1-5);
-  background: var(--bg-panel);
-  border-radius: var(--radius-lg);
+  padding: 0 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .summaryItem {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-half);
 }
 
 .summaryLabel {
   color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .summaryValue {
@@ -90,7 +125,7 @@
 
 .runtimeGroups {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 .settingsGroup {
@@ -120,26 +155,28 @@
 
 .settingsGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
-  gap: var(--space-1-5);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
 }
 
 .settingCard {
   min-width: 0;
-  padding: var(--space-2);
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1-5);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  gap: var(--space-1);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .cardHeader {
+  padding-top: var(--space-2);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-1-5);
+  gap: var(--space-2);
 }
 
 .cardCopy {
@@ -148,16 +185,16 @@
 
 .cardTitle {
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .cardDescription {
   margin-top: var(--space-half);
   color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .settingKey {
@@ -169,40 +206,47 @@
 }
 
 .cardBadges {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-half);
   flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .metaGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-1);
-  padding: var(--space-1);
-  background: var(--bg-panel);
-  border-radius: var(--radius-md);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-half);
+  flex-wrap: wrap;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .metaItem {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-half);
 }
+.metaItem + .metaItem::before { margin-right: var(--space-half); color: var(--text-dim); content: "·"; }
 
 .metaLabel {
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .metaValue {
+  min-width: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .metaValueStrong {
@@ -210,7 +254,8 @@
 }
 
 .editor {
-  margin-top: auto;
+  margin-top: 0;
+  padding-bottom: var(--space-2);
   display: grid;
   gap: var(--space-1);
 }
@@ -274,41 +319,40 @@
 
 .integrationGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-1-5);
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 
 .integrationCard {
   min-width: 0;
-  min-height: 88px;
-  padding: var(--space-2);
+  min-height: 72px;
+  padding: var(--space-2) 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   color: var(--text);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   cursor: pointer;
   text-align: left;
-  transition: background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap);
+  transition: background-color var(--motion-fast) var(--ease-snap);
 }
 
-.integrationCard:not(:disabled):hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+@media (hover: hover) and (pointer: fine) {
+  .integrationCard:not(:disabled):hover { background: var(--bg-hover); }
 }
 
 .integrationCard:disabled {
-  color: var(--text-dim);
+  color: var(--text-disabled);
   cursor: not-allowed;
-  opacity: 0.62;
+  opacity: 1;
 }
-
 .integrationCard:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: 0;
+  background: var(--bg-hover);
 }
 
 .integrationTitle {
@@ -330,9 +374,11 @@
   transition: color var(--motion-fast) var(--ease-snap), transform var(--motion-fast) var(--ease-snap);
 }
 
-.integrationCard:not(:disabled):hover .integrationArrow {
-  color: var(--accent);
-  transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+  .integrationCard:not(:disabled):hover .integrationArrow {
+    color: var(--accent);
+    transform: translateX(2px);
+  }
 }
 
 .loadingGrid {
@@ -341,12 +387,13 @@
 }
 
 .loadingCard {
-  padding: var(--space-2);
+  padding: var(--space-2) 0;
   display: grid;
   gap: var(--space-1);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .footer {
@@ -368,54 +415,83 @@
 }
 
 @media (max-width: 640px) {
-  .navigation {
-    padding: var(--space-1) var(--space-1-5);
+  .body {
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
-  .scopeToolbar {
-    padding: 0 var(--space-1-5) var(--space-1);
-    grid-template-columns: 1fr;
-    gap: var(--space-1);
+  .workspace {
+    width: 100%;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
+
+  .stickyControls {
+    position: relative;
+    top: auto;
+    padding: 0;
+    gap: 0;
+    flex: 0 0 auto;
+    background: var(--bg-raised);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .navigation { padding: 0; }
+  .navigation :global(.pi-segmented) {
+    min-height: var(--utility-row-height);
+    display: flex;
+    padding: 0;
+    gap: 0;
+    background: var(--bg-raised);
+    border-radius: 0;
+  }
+  .navigation :global(.pi-segmented__option) {
+    min-height: var(--utility-row-height);
+    justify-content: center;
+    border-radius: 0;
+    font-size: 13px;
+  }
+  .scopeToolbar {
+    margin-top: 0;
+    padding: var(--space-1) var(--content-gutter);
+    grid-template-columns: 1fr;
+    gap: var(--space-half);
+    border-top: 0;
+  }
+  .scopeToolbar :global(.pi-segmented) { min-height: 40px; padding: 0; gap: 0; background: transparent; border-radius: 0; }
+  .scopeToolbar :global(.pi-segmented__option) { min-height: 40px; border-radius: 0; }
 
   .content {
-    padding: var(--space-1-5);
+    min-height: 0;
+    padding: var(--space-2) 0 var(--space-4);
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
+  .content > :global(.pi-notice),
+  .content > :global(.pi-empty-state) { margin-inline: var(--content-gutter); }
 
-  .summary {
-    grid-template-columns: 1fr;
-  }
+  .summary { margin-inline: var(--content-gutter); gap: var(--space-half); padding-bottom: var(--space-2); }
+  .runtimeGroups { gap: var(--space-2); }
+  .settingsGroup { gap: 0; }
+  .groupHeading { min-height: var(--utility-row-height); padding-inline: var(--content-gutter); }
+  .settingCard { padding: 0 var(--content-gutter); gap: var(--space-1); }
+  .cardHeader { padding-top: var(--space-2); flex-direction: column; gap: var(--space-1); }
+  .cardBadges { justify-content: flex-start; }
+  .metaGrid { gap: var(--space-half); }
+  .editor { padding-bottom: var(--space-2); }
 
-  .settingCard {
-    padding: var(--space-1-5);
-  }
-
-  .cardHeader {
-    flex-direction: column;
-  }
-
-  .cardBadges {
-    justify-content: flex-start;
-  }
-
-  .metaGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .controlActions > button {
-    flex: 1 1 0;
-  }
-
-  .integrationGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .integrationCard {
-    min-height: var(--control-touch);
-    padding: var(--space-1-5);
-  }
-
-  .footerMessage {
-    display: none;
-  }
+  .controlActions > button { flex: 0 0 auto; }
+  .integrationGrid { grid-template-columns: 1fr; }
+  .appPanel { width: 100%; padding-inline: var(--content-gutter); }
+  .integrationCard { min-height: var(--list-row-height); padding: var(--space-1) 0; }
+  .footerMessage { display: none; }
 }
