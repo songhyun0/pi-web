@@ -31,6 +31,18 @@ function issueLabel(diagnostics: ProfileDiagnostic[], conflicts: ToolConflict[])
   return parts.length ? parts.join(" · ") : null;
 }
 
+function profileErrorAnnouncement(error: string | null | undefined, diagnostics: ProfileDiagnostic[]): string | null {
+  const directError = error?.trim();
+  const messages = [
+    directError,
+    ...diagnostics
+      .filter((diagnostic) => diagnostic.type === "error")
+      .map((diagnostic) => diagnostic.message.trim()),
+  ].filter((message): message is string => Boolean(message));
+  const uniqueMessages = [...new Set(messages)];
+  return uniqueMessages.length ? `Profile error: ${uniqueMessages.join(" ")}` : null;
+}
+
 function Checkmark({ visible }: { visible: boolean }) {
   return visible ? (
     <svg className={styles.checkmark} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -55,6 +67,8 @@ export interface ProfileSelectorProps {
   error?: string | null;
   onSelectProfile: (profileRef: ProfileRef | null) => void | Promise<void>;
   onOpenManager: () => void;
+  quickControls?: boolean;
+  onBeforeOpenManager?: () => void;
 }
 
 export function ProfileSelector({
@@ -73,6 +87,8 @@ export function ProfileSelector({
   error,
   onSelectProfile,
   onOpenManager,
+  quickControls = false,
+  onBeforeOpenManager,
 }: ProfileSelectorProps) {
   const [open, setOpen] = useState(false);
   const [menuShift, setMenuShift] = useState(0);
@@ -84,6 +100,7 @@ export function ProfileSelector({
   const globalDefault = profiles.find((profile) => profile.id === globalDefaultProfileRef);
   const summary = issueLabel(diagnostics, conflicts);
   const hasError = Boolean(error || diagnostics.some((diagnostic) => diagnostic.type === "error"));
+  const activeErrorAnnouncement = profileErrorAnnouncement(error, diagnostics);
   const issueTone = hasError ? "danger" : summary || setupWarnings.length ? "warning" : null;
   const activeToolCount = runtimeTools.length
     ? runtimeTools.filter((tool) => tool.active).length
@@ -103,16 +120,18 @@ export function ProfileSelector({
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
     };
     document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [open]);
 
@@ -167,10 +186,21 @@ export function ProfileSelector({
     void onSelectProfile(profileRef);
   };
 
+  const openManager = () => {
+    setOpen(false);
+    onBeforeOpenManager?.();
+    if (onBeforeOpenManager) window.requestAnimationFrame(onOpenManager);
+    else onOpenManager();
+  };
+
   const currentUnavailable = mode === "existing" && !selectedProfileRef;
 
   return (
-    <div ref={containerRef} className={styles.container}>
+    <div
+      ref={containerRef}
+      className={styles.container}
+      data-quick-controls={quickControls || undefined}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -195,6 +225,12 @@ export function ProfileSelector({
         </svg>
       </button>
 
+      {activeErrorAnnouncement && (
+        <span className={styles.errorAlert} role="alert" aria-atomic="true">
+          {activeErrorAnnouncement}
+        </span>
+      )}
+
       {open && (
         <div ref={menuRef} role="menu" aria-label="Profiles" className={styles.menu} style={menuStyle} onKeyDown={handleMenuKeyDown}>
           <header className={styles.menuHeader}>
@@ -214,8 +250,11 @@ export function ProfileSelector({
                 onClick={() => selectProfile(null)}
               >
                 <Checkmark visible={!selectedProfileRef} />
-                <span className={styles.optionCopy}><strong>Global default</strong><span>{globalDefault?.name ?? "Resolved by the server"}</span></span>
-                <Badge tone="neutral">automatic</Badge>
+                <span className={styles.optionCopy}>
+                  <strong>{quickControls ? "Use global default" : "Global default"}</strong>
+                  <span>{quickControls ? (globalDefault ? `Currently ${globalDefault.name}` : "Resolved when the session starts") : (globalDefault?.name ?? "Resolved by the server")}</span>
+                </span>
+                <Badge tone="neutral">{quickControls ? "inherited" : "automatic"}</Badge>
               </button>
             )}
 
@@ -248,8 +287,11 @@ export function ProfileSelector({
                   onClick={() => selectProfile(profile.id)}
                 >
                   <Checkmark visible={active} />
-                  <span className={styles.optionCopy}><strong>{profile.name}</strong><span>{profile.description || presetLabel(profile.tools.builtinPreset)}</span></span>
-                  {isDefault && <Badge tone="accent">default</Badge>}
+                  <span className={styles.optionCopy}>
+                    <strong>{profile.name}</strong>
+                    <span>{quickControls && isDefault ? "Pin instead of inheriting the global default" : quickControls ? presetLabel(profile.tools.builtinPreset) : (profile.description || presetLabel(profile.tools.builtinPreset))}</span>
+                  </span>
+                  {isDefault && <Badge tone="accent">{quickControls ? "global" : "default"}</Badge>}
                 </button>
               );
             })}
@@ -259,7 +301,7 @@ export function ProfileSelector({
             <details className={styles.issues} data-tone={hasError ? "danger" : "warning"}>
               <summary>{error ? "Profile error" : summary ?? "Profile setup"}</summary>
               <div className={styles.issueList}>
-                {error && <div role="alert" data-tone="danger">{error}</div>}
+                {error && <div data-tone="danger">{error}</div>}
                 {conflicts.map((conflict) => <div key={`${conflict.name}:${conflict.pluginSource ?? "builtin"}`}><code>{conflict.name}</code> uses {conflict.pluginSource ?? conflict.selectedProvider}</div>)}
                 {diagnostics.filter((diagnostic) => diagnostic.type !== "info").map((diagnostic) => (
                   <div key={`${diagnostic.type}:${diagnostic.source ?? ""}:${diagnostic.path ?? ""}:${diagnostic.message}`} data-tone={diagnostic.type === "error" ? "danger" : undefined}>{diagnostic.message}</div>
@@ -269,7 +311,7 @@ export function ProfileSelector({
             </details>
           )}
 
-          <button type="button" role="menuitem" className={styles.manageButton} onClick={() => { setOpen(false); onOpenManager(); }}>
+          <button type="button" role="menuitem" className={styles.manageButton} onClick={openManager}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66 1 .3.28.68.42 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.76.6Z" />

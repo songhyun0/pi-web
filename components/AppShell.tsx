@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useForkComposerFocus } from "@/hooks/useForkComposerFocus";
 import { useTheme } from "@/hooks/useTheme";
 import { useViewportTier } from "@/hooks/useViewportTier";
 import { type AppSettings, DEFAULT_APP_SETTINGS } from "@/lib/app-settings";
@@ -255,6 +256,7 @@ export function AppShell() {
   }, []);
 
   const chatInputRef = useRef<ChatInputHandle | null>(null);
+  const queueForkComposerFocus = useForkComposerFocus(chatInputRef, selectedSession?.id ?? null);
   const topBarRef = useRef<HTMLDivElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
@@ -521,7 +523,8 @@ export function AppShell() {
     setExplorerRefreshKey((k) => k + 1);
   }, []);
 
-  const handleSessionForked = useCallback((newSessionId: string) => {
+  const handleSessionForked = useCallback((newSessionId: string, selectedText?: string) => {
+    queueForkComposerFocus(newSessionId, selectedText);
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
@@ -531,7 +534,7 @@ export function AppShell() {
     }));
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [router, hydrateSelectedSession, queueForkComposerFocus]);
 
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);

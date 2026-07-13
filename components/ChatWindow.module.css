@@ -10,26 +10,24 @@
 
 .state {
   height: 100%;
-  padding: var(--space-3);
+  padding: var(--space-4);
   display: grid;
   place-items: center;
   color: var(--text-muted);
   background: var(--bg);
   text-align: center;
 }
-
 .stateCard {
-  width: min(100%, 460px);
-  padding: var(--space-3);
+  width: min(100%, 520px);
+  padding: var(--space-4);
   display: grid;
   justify-items: center;
   gap: var(--space-1);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-popover);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
-
 .stateSpinner {
   width: 36px;
   height: 36px;
@@ -40,14 +38,16 @@
   animation: stateSpin 700ms linear infinite;
 }
 
-.stateIcon { width: 38px; height: 38px; margin-bottom: var(--space-half); color: var(--error); }
-.stateEyebrow { color: var(--text-dim); font-family: var(--font-mono); font-size: 9px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
-.stateTitle { margin: 0; color: var(--text); font-size: 18px; font-weight: 720; line-height: 1.25; }
-.stateDescription { max-width: 38ch; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.stateIcon { width: 40px; height: 40px; margin-bottom: var(--space-1); color: var(--error); }
+.stateEyebrow { color: var(--text-dim); font-size: 12px; font-weight: 600; }
+.stateTitle { margin: 0; color: var(--text); font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -.02em; }
+.stateDescription { max-width: 42ch; margin: 0; color: var(--text-muted); font-size: 14px; line-height: 1.6; }
 .stateDetail { max-width: 100%; margin-top: var(--space-half); padding: var(--space-half) var(--space-1); overflow-wrap: anywhere; color: var(--error); background: var(--error-soft); border: 1px solid color-mix(in srgb, var(--error) 22%, var(--border)); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 10px; }
 .stateAction { min-height: 36px; margin-top: var(--space-half); padding-inline: var(--space-2); color: var(--accent-contrast); background: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-md); cursor: pointer; font: inherit; font-size: 11px; font-weight: 650; }
-.stateAction:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.stateAction:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .stateAction:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+}
+.stateAction:focus-visible { outline: 0; background: var(--bg-hover); }
 
 .dropOverlay {
   position: absolute;
@@ -91,28 +91,25 @@
 .empty {
   min-height: 0;
   flex: 1 1 auto;
-  padding: var(--space-4) var(--space-2);
+  padding: var(--space-6) var(--space-3);
   display: grid;
   place-items: center;
   overflow-y: auto;
 }
-
 .emptyInner,
 .column {
   width: 100%;
-  max-width: 840px;
+  max-width: 880px;
   margin-inline: auto;
 }
-
 .brandRow {
-  margin: 0 var(--space-4) var(--space-1-5);
+  margin: 0 0 var(--space-3);
+  padding-inline: var(--space-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  font-family: var(--font-mono);
 }
-
 .brandIdentity {
   min-width: 0;
   display: flex;
@@ -123,11 +120,10 @@
 
 .brandMark {
   flex: 0 0 auto;
-  color: var(--accent);
-  font-size: 24px;
+  color: var(--text);
+  font-size: 28px;
   font-weight: 760;
 }
-
 .brandName {
   min-width: 0;
   overflow: hidden;
@@ -159,36 +155,32 @@
 
 .floatingNotices {
   position: absolute;
-  inset: var(--space-1-5) 36px auto 0;
+  inset: var(--space-2) 40px auto 0;
   z-index: 40;
-  padding-inline: var(--space-2);
+  padding-inline: var(--space-3);
   pointer-events: none;
 }
-
 .timeline {
   min-width: 0;
   flex: 1 1 auto;
-  padding-top: var(--space-2);
+  padding-top: var(--space-3);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
 }
-
 .timeline::-webkit-scrollbar { display: none; }
-.timelinePadding { padding-inline: var(--space-2); }
+.timelinePadding { padding-inline: var(--space-3); }
 .messageAnchor { min-width: 0; }
 
 .phase {
-  min-height: 36px;
+  min-height: 40px;
   padding: var(--space-1) 0;
   display: flex;
   align-items: center;
   gap: var(--space-1);
   color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
-
 .phase::before {
   width: 6px;
   height: 6px;
@@ -205,10 +197,10 @@
 .extensionFooter { padding-inline: var(--space-2); }
 .desktopComposerOffset { padding-right: 36px; }
 
-.processGroup { margin-bottom: var(--space-2); }
+.processGroup { margin-bottom: var(--space-3); }
 .processToggle {
-  min-height: 30px;
-  padding: 0 var(--space-half);
+  min-height: 40px;
+  padding: 0 var(--space-1);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -218,17 +210,26 @@
   border-radius: var(--radius-md);
   cursor: pointer;
   font: inherit;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   text-align: left;
 }
-.processToggle:hover { color: var(--text); background: var(--bg-hover); }
-.processToggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .processToggle:hover { color: var(--text); background: var(--bg-hover); }
+}
+.processToggle:focus-visible { outline: 0; background: var(--bg-hover); }
 .processToggle svg { flex: 0 0 auto; transition: transform var(--motion-fast) var(--ease-snap); }
 .processToggle[data-expanded="true"] svg { transform: rotate(90deg); }
 .processToggle span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.processBody { margin-top: var(--space-1); }
-
+.processBody {
+  margin-top: var(--space-1);
+  padding-left: var(--space-1);
+  display: grid;
+  gap: var(--space-half);
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
 .noticeShelf {
   display: flex;
   flex-direction: column;
@@ -237,10 +238,10 @@
 .noticeShelf[data-align="right"] { align-items: flex-end; }
 .noticeShelf:not([data-floating="true"]) { margin-bottom: var(--space-1); }
 .noticeItem {
-  --notice-tone: var(--accent);
+  --notice-tone: var(--text-muted);
   width: fit-content;
   max-width: min(100%, 620px);
-  min-height: 40px;
+  min-height: 44px;
   padding: var(--space-1) var(--space-1-5);
   display: flex;
   align-items: center;
@@ -248,12 +249,11 @@
   overflow: hidden;
   color: var(--text-muted);
   background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--notice-tone);
-  border-radius: var(--radius-lg);
+  border: 0;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.45;
   pointer-events: auto;
   transform-origin: top center;
   animation: noticeIn var(--motion-enter) var(--ease-snap) both;
@@ -274,20 +274,21 @@
 
 @media (max-width: 1024px), (pointer: coarse) {
   .processToggle,
-  .noticeItem,
   .stateAction { min-height: var(--control-touch); }
 }
 
 @media (max-width: 640px) {
-  .state { padding: var(--space-1-5); }
-  .stateCard { padding: var(--space-2); }
-  .empty { padding: var(--space-3) var(--space-1-5); align-items: end; }
-  .brandRow { margin-inline: var(--space-half); }
-  .brandMark { font-size: 20px; }
-  .brandName { font-size: 17px; }
+  .state { padding: var(--space-2); }
+  .stateCard { padding: var(--space-3) var(--space-1); }
+  .empty { padding: var(--space-2) var(--space-1-5); display: block; overflow-y: auto; }
+  .emptyInner { min-height: 100%; display: flex; flex-direction: column; }
+  .brandRow { margin: auto 0; padding-inline: 0; justify-content: center; text-align: center; }
+  .brandIdentity { justify-content: center; }
+  .brandMark { font-size: 24px; }
+  .brandName { font-size: 19px; }
   .versions { display: none; }
   .floatingNotices { right: 0; padding-inline: var(--space-1-5); }
-  .timeline { padding-top: var(--space-1); }
+  .timeline { padding-top: var(--space-2); }
   .timelinePadding { padding-inline: var(--space-1-5); }
   .extensionFooter { padding-inline: var(--space-1-5); }
   .desktopComposerOffset { padding-right: 0; }

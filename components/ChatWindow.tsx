@@ -28,7 +28,7 @@ interface Props {
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
-  onSessionForked?: (newSessionId: string) => void;
+  onSessionForked?: (newSessionId: string, selectedText?: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -267,8 +267,8 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
-  const openAIFastStatus = openAIFastMode?.statusText ?? null;
   const openAIFastEligible = openAIFastMode?.eligible;
+  const openAIFastModeActive = openAIFastMode?.active;
   const showOpenAIFastToggle = !!openAIFastMode
     && (openAIFastMode.eligible || displayModelValue?.provider === "openai" || displayModelValue?.provider === "openai-codex");
   const handleProfileSelect = useCallback(async (profileRef: string | null) => {
@@ -379,8 +379,8 @@ export function ChatWindow({ appName = DEFAULT_APP_DISPLAY_NAME, session, newSes
       modelNames={modelNames}
       modelList={modelList}
       showOpenAIFastToggle={showOpenAIFastToggle}
-      openAIFastStatus={openAIFastStatus}
       openAIFastEligible={openAIFastEligible}
+      openAIFastModeActive={openAIFastModeActive}
       onOpenAIFastToggle={showOpenAIFastToggle ? handleOpenAIFastToggle : undefined}
       onModelChange={handleModelChange}
       onCompact={session || isNew ? handleCompact : undefined}

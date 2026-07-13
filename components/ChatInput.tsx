@@ -19,7 +19,8 @@ import { IMPLEMENTED_WEB_BUILTIN_SLASH_COMMANDS } from "@/lib/slash-command-regi
 import { buildWebKeybindings, eventMatchesWebAction, type WebKeybinding } from "@/lib/web-keybindings";
 import styles from "./ChatInput.module.css";
 import { FolderIcon, getFileIcon } from "./FileIcons";
-import { Button, Dialog } from "./ui";
+import { deriveOpenAIFastControlState, OpenAIFastCompactControl } from "./OpenAIFastCompactControl";
+import { Button, Dialog, Select } from "./ui";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -46,8 +47,8 @@ interface Props {
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
   showOpenAIFastToggle?: boolean;
-  openAIFastStatus?: string | null;
   openAIFastEligible?: boolean;
+  openAIFastModeActive?: boolean;
   onOpenAIFastToggle?: () => void | Promise<void>;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
@@ -77,6 +78,7 @@ interface Props {
   onExtensionAutocomplete?: (text: string, cursor: number) => Promise<ExtensionAutocompleteResult>;
 }
 export interface ChatInputHandle {
+  focus: () => void;
   insertText: (text: string) => void;
   setText: (text: string) => void;
   insertIfEmpty: (text: string) => void;
@@ -189,7 +191,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, onModelChange,
-  showOpenAIFastToggle, openAIFastStatus, openAIFastEligible, onOpenAIFastToggle,
+  showOpenAIFastToggle, openAIFastEligible, openAIFastModeActive, onOpenAIFastToggle,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, profileSelector,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, onRecallQueue,
@@ -265,6 +267,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   useImperativeHandle(ref, () => ({
+    focus() {
+      textareaRef.current?.focus({ preventScroll: true });
+    },
     insertIfEmpty(text: string) {
       const ta = textareaRef.current;
       const current = ta ? ta.value : value;
@@ -1000,16 +1005,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (lvl === "auto" || !thinkingLevelMap) return lvl;
     return thinkingLevelMap[lvl] ?? lvl;
   })();
-  const normalizedOpenAIFastStatus = (openAIFastStatus ?? "").toLowerCase();
-  const openAIFastActive = normalizedOpenAIFastStatus.includes("fast")
-    && !normalizedOpenAIFastStatus.includes("unavailable")
-    && !normalizedOpenAIFastStatus.includes("normal");
-  const openAIFastUnavailable = openAIFastEligible === false
-    || normalizedOpenAIFastStatus.includes("unavailable")
-    || normalizedOpenAIFastStatus.includes("n/a");
+  const openAIFastControlState = deriveOpenAIFastControlState(openAIFastEligible, openAIFastModeActive);
+  const { active: openAIFastActive, unavailable: openAIFastUnavailable } = openAIFastControlState;
   const openAIFastButtonDisabled = isStreaming || fastToggleBusy || !onOpenAIFastToggle || openAIFastUnavailable;
   const openAIFastLabel = openAIFastUnavailable ? "Fast N/A" : openAIFastActive ? "Fast" : "Normal";
-  const openAIFastCompactLabel = openAIFastUnavailable ? "N/A" : openAIFastActive ? "Fast" : "Norm";
   const openAIFastTitle = openAIFastUnavailable
     ? "OpenAI Fast mode is unavailable for the current model"
     : openAIFastActive
@@ -1064,7 +1063,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const slashMenuMaxHeight = Math.min(AUTOCOMPLETE_MENU_MAX_HEIGHT_PX, autocompleteMenuMaxHeight);
   const atMenuMaxHeight = Math.min(400, autocompleteMenuMaxHeight);
-
+  const quickProfileSelector = React.isValidElement<{
+    quickControls?: boolean;
+    onBeforeOpenManager?: () => void;
+  }>(profileSelector)
+    ? React.cloneElement(profileSelector, {
+        quickControls: true,
+        onBeforeOpenManager: () => setControlsMenuOpen(false),
+      })
+    : profileSelector;
 
   return (
     <div className={styles.root} data-minimap={!isMobile || undefined}>
@@ -1165,8 +1172,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           </div>
         )}
 
-        {/* Main input */}
-        <div ref={autocompleteAnchorRef} className={styles.anchor}>
+        {/* Main input and run controls share one floating surface. */}
+        <div className={styles.composerSurface}>
+          <div ref={autocompleteAnchorRef} className={styles.anchor}>
           {slashMenuOpen && slashQuery !== null && (
             <div
               id="composer-slash-menu"
@@ -1591,6 +1599,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </button>
             )}
           </div>
+          </div>
         </div>
 
         <Dialog
@@ -1600,60 +1609,89 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           description="Reasoning, profile, compaction, and completion settings."
           variant="sheet"
           size="md"
+          className={styles.controlsDialog}
+          bodyClassName={styles.controlsDialogBody}
         >
           <div className={styles.controlsSheet}>
             {onThinkingLevelChange && (
-              <section className={styles.controlsSection}>
-                <h3 className={styles.controlsTitle}>Reasoning</h3>
-                <div className={styles.controlsActions}>
-                  {THINKING_LEVELS.filter((level) => level === "auto" || !availableThinkingLevels || availableThinkingLevels.includes(level)).map((level) => {
-                    const active = (thinkingLevel ?? "auto") === level;
-                    const mappedValue = level !== "auto" && thinkingLevelMap ? thinkingLevelMap[level] : undefined;
-                    const label = mappedValue != null && mappedValue !== level ? mappedValue : level;
-                    return (
-                      <button
-                        key={level}
-                        type="button"
-                        className={styles.control}
-                        data-active={active || undefined}
-                        aria-pressed={active}
-                        disabled={isStreaming}
-                        onClick={() => { if (!active) onThinkingLevelChange(level); }}
-                        title={THINKING_LEVEL_DESC[level]}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
+              <section className={`${styles.controlsSection} ${styles.reasoningSection}`}>
+                <div className={styles.controlsRow}>
+                  <span className={styles.controlsLabel}>Reasoning effort</span>
+                  <Select
+                    className={styles.reasoningSelect}
+                    value={thinkingLevel ?? "auto"}
+                    disabled={isStreaming}
+                    aria-label="Reasoning effort"
+                    onChange={(event) => onThinkingLevelChange(event.target.value as NonNullable<Props["thinkingLevel"]>)}
+                  >
+                    {THINKING_LEVELS
+                      .filter((level) => level === "auto" || !availableThinkingLevels || availableThinkingLevels.includes(level))
+                      .map((level) => {
+                        const mappedValue = level !== "auto" && thinkingLevelMap ? thinkingLevelMap[level] : undefined;
+                        const label = mappedValue != null && mappedValue !== level ? mappedValue : THINKING_LEVEL_DESC[level];
+                        return <option key={level} value={level}>{label}</option>;
+                      })}
+                  </Select>
                 </div>
               </section>
             )}
             {profileSelector && (
-              <section className={styles.controlsSection}>
-                <h3 className={styles.controlsTitle}>Capability profile</h3>
-                <div className={styles.profileControl}>{profileSelector}</div>
+              <section className={`${styles.controlsSection} ${styles.profileSection}`}>
+                <div className={styles.controlsRow}>
+                  <span className={styles.controlsLabel}>Capability profile</span>
+                  <div className={styles.profileControl}>{quickProfileSelector}</div>
+                </div>
               </section>
             )}
-            <section className={styles.controlsSection}>
+            <section className={`${styles.controlsSection} ${styles.executionSection}`}>
               <h3 className={styles.controlsTitle}>Execution</h3>
               {compactError && <div className={styles.feedback} data-tone="danger" role="alert">{compactError}</div>}
               <div className={styles.controlsActions}>
-                <button type="button" className={styles.control} onClick={() => { setControlsMenuOpen(false); openPromptEditor(); }}>
-                  Prompt editor
+                <button
+                  type="button"
+                  className={styles.control}
+                  data-kind="action"
+                  onClick={() => { setControlsMenuOpen(false); openPromptEditor(); }}
+                >
+                  <span className={styles.executionLabel}>Prompt editor</span>
+                  <svg className={styles.actionIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
                 </button>
                 {showOpenAIFastToggle && (
-                  <button type="button" className={styles.control} data-active={openAIFastActive || undefined} onClick={handleOpenAIFastClick} disabled={openAIFastButtonDisabled} aria-pressed={openAIFastActive}>
-                    {openAIFastCompactLabel}
-                  </button>
+                  <OpenAIFastCompactControl
+                    state={openAIFastControlState}
+                    disabled={openAIFastButtonDisabled}
+                    onToggle={handleOpenAIFastClick}
+                    classNames={{
+                      control: styles.control,
+                      executionLabel: styles.executionLabel,
+                      toggleState: styles.toggleState,
+                    }}
+                  />
                 )}
                 {onCompact && !isStreaming && (
-                  <button type="button" className={styles.control} data-danger={isCompacting || undefined} onClick={isCompacting ? onAbortCompaction : onCompact}>
-                    {isCompacting ? "Stop compaction" : "Compact context"}
+                  <button
+                    type="button"
+                    className={styles.control}
+                    data-kind="action"
+                    data-danger={isCompacting || undefined}
+                    onClick={isCompacting ? onAbortCompaction : onCompact}
+                  >
+                    <span className={styles.executionLabel}>{isCompacting ? "Stop compaction" : "Compact context"}</span>
+                    <span className={styles.actionState}>{isCompacting ? "Stop" : "Run"}</span>
                   </button>
                 )}
                 {onSoundToggle !== undefined && (
-                  <button type="button" className={styles.control} data-active={soundEnabled || undefined} onClick={onSoundToggle} aria-pressed={soundEnabled}>
-                    Sound {soundEnabled ? "on" : "off"}
+                  <button
+                    type="button"
+                    className={styles.control}
+                    data-kind="toggle"
+                    data-active={soundEnabled || undefined}
+                    onClick={onSoundToggle}
+                    aria-label={`Completion sound — ${soundEnabled ? "On" : "Off"}`}
+                    aria-pressed={soundEnabled}
+                  >
+                    <span className={styles.executionLabel}>Completion sound</span>
+                    <span className={styles.toggleState} data-checked={soundEnabled || undefined} aria-hidden="true" />
                   </button>
                 )}
               </div>

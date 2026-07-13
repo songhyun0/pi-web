@@ -3,6 +3,19 @@
   min-width: 0;
 }
 
+.errorAlert {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .trigger {
   max-width: 210px;
   min-height: 34px;
@@ -20,20 +33,29 @@
   transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap), border-color var(--motion-fast) var(--ease-snap);
 }
 
-.trigger:hover,
 .trigger[data-open="true"] {
   color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
+  background: var(--bg-selected);
+  border-color: transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .trigger:hover:not([data-open="true"]) {
+    color: var(--text);
+    background: var(--bg-hover);
+    border-color: transparent;
+  }
 }
 
 .trigger:focus-visible,
 .option:focus-visible,
 .manageButton:focus-visible,
 .issues summary:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline: 0;
+  background: var(--bg-hover);
 }
+.trigger[data-open="true"]:focus-visible,
+.optionActive:focus-visible { background: var(--bg-selected); }
 
 .triggerIcon,
 .chevron {
@@ -80,7 +102,7 @@
   overflow: auto;
   color: var(--text);
   background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
   animation: profile-menu-enter var(--motion-enter) var(--ease-out) both;
@@ -139,15 +161,18 @@
   color: var(--text-muted);
   background: transparent;
   border: 0;
-  border-radius: var(--radius-md);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   cursor: pointer;
   text-align: left;
   transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
 }
 
-.option:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) and (pointer: fine) {
+  .option:hover:not(:disabled):not(.optionActive) {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .optionActive {
@@ -157,8 +182,9 @@
 
 .option:disabled,
 .optionUnavailable {
+  color: var(--text-disabled);
   cursor: default;
-  opacity: var(--state-disabled-opacity);
+  opacity: 1;
 }
 
 .checkmark {
@@ -250,9 +276,11 @@
   transition: color var(--motion-fast) var(--ease-snap), background-color var(--motion-fast) var(--ease-snap);
 }
 
-.manageButton:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) and (pointer: fine) {
+  .manageButton:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .manageButton > span:nth-child(2) {
@@ -292,6 +320,36 @@
   .menu {
     width: min(320px, calc(100vw - 24px));
     max-height: min(68dvh, 500px);
+  }
+
+  .container[data-quick-controls="true"] {
+    position: static;
+  }
+
+  .container[data-quick-controls="true"] .trigger {
+    width: 100%;
+    max-width: none;
+    min-height: var(--control-touch);
+  }
+
+  .container[data-quick-controls="true"] .menu {
+    position: absolute;
+    inset: -48px 0 auto;
+    z-index: 2;
+    width: auto;
+    min-height: 100px;
+    height: calc(2 * var(--control-touch) + var(--space-4));
+    max-height: calc(2 * var(--control-touch) + var(--space-4));
+    padding: var(--space-half);
+    overflow-y: auto;
+    background: var(--bg-raised);
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
+  }
+
+  .container[data-quick-controls="true"] .manageButton small {
+    display: none;
   }
 }
 

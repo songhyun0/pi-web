@@ -241,7 +241,7 @@ export interface UseAgentSessionOptions {
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
-  onSessionForked?: (newSessionId: string) => void;
+  onSessionForked?: (newSessionId: string, selectedText?: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -431,6 +431,7 @@ function readCompactResult(result: unknown, reason: string): CompactResultInfo |
 }
 
 export interface ChatInputHandle {
+  focus: () => void;
   insertText: (text: string) => void;
   setText: (text: string) => void;
   insertIfEmpty: (content: string) => void;
@@ -1600,12 +1601,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
       const { cancelled, newSessionId, selectedText } = result ?? {};
       if (!cancelled && newSessionId) {
-        onSessionForked?.(newSessionId);
-        if (selectedText) {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => opts.chatInputRef?.current?.insertIfEmpty(selectedText));
-          });
-        }
+        onSessionForked?.(newSessionId, selectedText);
       }
     } catch (e) {
       console.error("Fork failed:", e);
@@ -1613,7 +1609,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       setForkingEntryId(null);
     }
-  }, [addNotice, onSessionForked, opts.chatInputRef]);
+  }, [addNotice, onSessionForked]);
 
   const handleNavigate = useCallback(async (entryId: string, options?: { summarize?: boolean }) => {
     const sid = sessionIdRef.current;
