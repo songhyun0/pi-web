@@ -2,26 +2,29 @@
 
 <!-- Locked design decisions. Read this before every UI change and keep token changes synchronized with styleseed/tokens.json and app/design-tokens.css. -->
 
-- App domain: Developer tools + productivity workspace; AI/chat is secondary
+Implementation-specific UI polish decisions are locked in [`docs/ui-polish-decisions.md`](docs/ui-polish-decisions.md). When the two documents overlap, that decision record supplies the more specific component and responsive contract.
+
+- App domain: Productivity workspace + developer tools; AI/chat is secondary
 - Surface: Responsive web/PWA (desktop, compact/tablet, phone)
-- Skin: Technical
-- Key color (accent): `#23454B` in light mode; accessible derived teal in dark mode
-- Radius personality: Precision (`4px / 6px / 8px`; pills only for compact status badges)
-- Motion seed: Snap (`60ms / 100ms / 180ms`, no bounce)
+- Skin: Calm monochrome SaaS—Toss-like clarity without decorative color
+- Key color (accent): Neutral ink (`#27272A` light / `#F4F4F5` dark); semantic hues only for genuine success, warning, and error
+- Radius personality: Restrained soft (12px surfaces, 8px controls, 16px dialogs; pills only for compact status badges)
+- Motion seed: Quiet Snap (`80ms / 140ms / 200ms`, no bounce and no delayed content)
 - Type: Geist Sans for UI; Noto Sans Mono for code, paths, IDs, and tabular data
-- Density: Dense on pointer-first desktop; comfortable with `44px` minimum targets on touch
-- Theme: Dark-leading visual language with complete light parity; first visit follows the OS and explicit user choice persists
-- Elevation: Tonal surfaces + hairlines; restrained tinted shadows in light mode, tonal elevation in dark mode
+- Density: Compact technical workspace density—56px mobile headers, 44px utility rows and touch targets, 48px primary list rows
+- Theme: First visit follows the OS; light and dark have equal structural parity and explicit user choice persists
+- Elevation: Whitespace and tonal surfaces first; hairlines only where structure needs them; neutral layered shadows only on floating UI
 - Spacing: `8px` base grid with `4px` half-step only for compact icon/text relationships
 - Icon language: One outline family, `currentColor`, consistent optical weight; no emoji UI icons
-- Locked: 2026-07-10
+- Locked: 2026-07-11
 
 ## Product hierarchy
 
 1. The conversation is the focal surface.
 2. Projects, sessions, files, changes, and terminal are workspace navigation—not competing focal points.
 3. Configuration remains in focused, independent modules with one shared visual and interaction language.
-4. Normal states are neutral. Accent marks active/running/primary states; semantic colors are reserved for genuine success, warning, and error conditions.
+4. Normal and active states remain monochrome; semantic colors are reserved for genuine success, warning, and error conditions.
+5. The default surface is open and flat. Use whitespace or a single divider before adding a container; never nest cards for metadata or controls.
 
 ## Responsive contract
 
@@ -29,15 +32,18 @@
 - Compact/tablet: preserve context with one primary surface and one optional supporting layer.
 - Desktop: resizable sidebar + conversation + optional inspector.
 - Complex settings use full-screen mobile surfaces; short confirmations and pickers may use bottom sheets.
-- Mobile list/detail flows use drill-down navigation with visible Back and browser/system-back parity.
+- Settings use category navigation plus one content surface on desktop. On phone, categories move to a top-level selector and settings become full-width divider rows.
+- Mobile workspace list/detail flows use drill-down navigation with visible Back and browser/system-back parity.
 - Safe areas, `visualViewport`, virtual keyboards, and `44px` touch targets are required—not polish.
 
 ## Settings contract
 
-- Keep Models, Skills, Plugins, Runtime/App, Profiles, Trust, and Hotkeys as focused modules.
-- Scope-aware modules use one sticky `Global / Project` switch and expose effective value, inheritance source, and override state.
+- Keep Models, Skills, Plugins, Runtime/App, Profiles, Trust, and Hotkeys as focused modules under one shared category navigation.
+- Each category owns one open content surface. Group headings and whitespace establish hierarchy; individual settings are full-width rows separated by hairlines, not cards.
+- Scope-aware modules use one sticky `Global / Project` switch and expose effective value, inheritance source, and override state without a nested metadata box.
 - Reversible toggles/actions save immediately with clear feedback and Undo where practical.
 - Complex forms use dirty state and a persistent Save action; destructive and trust actions require confirmation.
+- On phone, remove outer borders, radii, and horizontal card margins so list rows use the viewport safely with `16px` content gutters.
 
 ## Mobile workspace contract
 
@@ -58,15 +64,7 @@
 
 ## Migration status
 
-- Foundation and primitives: StyleSeed source score `91/100` (2026-07-10).
-- Responsive `SettingsModal`: StyleSeed source score `95/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including loading, error, project-blocked, inline feedback/Undo, dirty, and discard-confirmation states.
-- Responsive `ModelsConfig`: StyleSeed source score `96/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including provider/model editors, add-provider search, loading, empty, error, model-test feedback, dirty authentication, browser-back handling, and destructive confirmation states.
-- Responsive `PluginsConfig`: StyleSeed source score `96/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including inventory/detail navigation, installation, loading, empty, error, diagnostics, working, inline feedback/Undo, dirty browser-back handling, and destructive confirmation states.
-- Responsive `SkillsConfig`: StyleSeed source score `96/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including loaded-skill filtering, registry search/install, loading, empty, error, diagnostics, working, inline feedback/Undo, install failure, and browser-back handling.
-- Responsive Profiles UI (`ProfileManagerModal`, `ProfileWizard`, and `ProfileSelector`): StyleSeed source score `97/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including inventory/detail navigation, the five-step capability wizard, effective preview, loading, empty, error, setup warnings, diagnostics, inline feedback/Undo, dirty browser-back handling, and destructive confirmation states.
-- Responsive `ProjectTrustModal`: StyleSeed source score `97/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including decision-required, trusted, denied, inherited, no-resource, loading, error, confirmation-impact, and saved-decision states.
-- Responsive `HotkeysModal`: StyleSeed source score `97/100` (2026-07-10). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including grouped registry, search, status filters, customized/conflict/unbound shortcuts, loading, empty, and fallback-on-error states.
-- Responsive workspace shell (`AppShell`, `SessionSidebar`, `FileExplorer`, and `TabBar`): StyleSeed source score `96/100` (2026-07-11). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including desktop resizing, compact overlays, phone project drill-down, Sessions/Explorer switching, worktree controls, session actions and destructive confirmation, file actions, Inspector/More layers, loading, empty, server-error, Escape, focus/inert behavior, and browser Back/Forward state composition.
-- Responsive Chat/Composer (`ChatWindow`, `ChatInput`, `MessageView`, `ChatMinimap`, and `BranchNavigator`): StyleSeed source score `96/100` (2026-07-11). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including transcript-first user/assistant turns, collapsed and expanded thinking/tool process stacks, long Markdown, streaming Steer/Follow-up/Stop controls, queued messages, retry feedback, attachments, slash/model menus, Prompt Editor focus, loading, empty, recoverable error, and no-horizontal-overflow states.
-- Responsive Inspector internals (`GitChangesPanel`, `FileViewer`, `TerminalPanel`, `TabBar`, and `InspectorFileSheet`): StyleSeed source score `98/100` (2026-07-11). Visual gate passed at `1440×900`, `768×1024`, and `390×844` in light and dark themes, including Git list/detail and long diffs, file source/Markdown/image previews, live SSE revision diffs, open-file switching/closing with browser Back/Forward restoration, loading, empty, oversized-file and server-error recovery, terminal loading/empty/service-error states, and kill/restart confirmations. No horizontal overflow or unexpected runtime errors were observed.
-- Release gate still requires hands-on iOS Safari/PWA and Android Chrome checks; Chromium device emulation does not replace physical-device validation.
+- Previous technical StyleSeed redesign is preserved at baseline commit `ef7ce8b` (2026-07-11).
+- Calm monochrome redesign: StyleSeed source score `93/100` (2026-07-11).
+- Rendered gate passed in Chromium at `1440×900`, `768×1024`, and `390×844` in light and dark themes. Verified workspace empty/session states, the single-surface composer, collapsed/expanded process groups, settings category navigation, mobile full-width settings rows, and zero horizontal page overflow.
+- Hands-on iOS Safari/PWA and Android Chrome checks remain a release-environment gate; Chromium device emulation does not replace physical-device validation.
